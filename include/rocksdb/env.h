@@ -17,12 +17,15 @@
 #pragma once
 
 #include <stdint.h>
+
 #include <cstdarg>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "rocksdb/customizable.h"
 #include "rocksdb/status.h"
 #include "rocksdb/thread_status.h"
 
@@ -51,12 +54,14 @@ class WritableFile;
 class RandomRWFile;
 class MemoryMappedFileBuffer;
 class Directory;
+struct ConfigOptions;
 struct DBOptions;
 struct ImmutableDBOptions;
 struct MutableDBOptions;
 class RateLimiter;
 class ThreadStatusUpdater;
 struct ThreadStatus;
+class FileSystem;
 
 const size_t kDefaultPageSize = 4 * 1024;
 
@@ -130,8 +135,14 @@ struct EnvOptions {
   RateLimiter* rate_limiter = nullptr;
 };
 
-class Env {
+class Env : public Customizable {
  public:
+  static const std::string kPosixEnvName /*= "Posix" */;
+  static const std::string kDefaultEnvName /*= "Default" */;
+  static const std::string kMemoryEnvName /*= "Memory" */;
+  static const std::string kTimedEnvName /*= "Timed" */;
+  static const std::string kEncryptedEnvName /*= "Encrypted" */;
+
   struct FileAttributes {
     // File name
     std::string name;
@@ -140,7 +151,9 @@ class Env {
     uint64_t size_bytes;
   };
 
-  Env() : thread_status_updater_(nullptr) {}
+  Env();
+  // Construct an Env with a separate FileSystem implementation
+  Env(std::shared_ptr<FileSystem> fs);
   // No copying allowed
   Env(const Env&) = delete;
   void operator=(const Env&) = delete;
@@ -150,11 +163,17 @@ class Env {
   static const char* Type() { return "Environment"; }
 
   // Loads the environment specified by the input value into the result
+  // The LoadEnv methods are deprecated in favor of the CreateFromString variants
   static Status LoadEnv(const std::string& value, Env** result);
-
-  // Loads the environment specified by the input value into the result
   static Status LoadEnv(const std::string& value, Env** result,
                         std::shared_ptr<Env>* guard);
+  
+  static Status CreateFromString(const std::string& value,
+                                 const ConfigOptions& opts, Env** result);
+
+  static Status CreateFromString(const std::string& value,
+                                 const ConfigOptions& opts, Env** result,
+                                 std::shared_ptr<Env>* guard);
 
   // Return a default environment suitable for the current operating
   // system.  Sophisticated users may wish to provide their own Env
@@ -162,6 +181,15 @@ class Env {
   //
   // The result of Default() belongs to rocksdb and must never be deleted.
   static Env* Default();
+
+  // See FileSystem::RegisterDbPaths.
+  virtual Status RegisterDbPaths(const std::vector<std::string>& /*paths*/) {
+    return Status::OK();
+  }
+  // See FileSystem::UnregisterDbPaths.
+  virtual Status UnregisterDbPaths(const std::vector<std::string>& /*paths*/) {
+    return Status::OK();
+  }
 
   // Create a brand new sequentially-readable file with the specified name.
   // On success, stores a pointer to the new file in *result and returns OK.
@@ -530,12 +558,19 @@ class Env {
 
   virtual void SanitizeEnvOptions(EnvOptions* /*env_opts*/) const {}
 
+  // Get the FileSystem implementation this Env was constructed with. It
+  // could be a fully implemented one, or a wrapper class around the Env
+  const std::shared_ptr<FileSystem>& GetFileSystem() const;
+
   // If you're adding methods here, remember to add them to EnvWrapper too.
 
  protected:
   // The pointer to an internal structure that will update the
   // status of each thread.
   ThreadStatusUpdater* thread_status_updater_;
+
+  // Pointer to the underlying FileSystem implementation
+  std::shared_ptr<FileSystem> file_system_;
 };
 
 // The factory function to construct a ThreadStatusUpdater.  Any Env
@@ -1148,13 +1183,21 @@ extern Status ReadFileToString(Env* env, const std::string& fname,
 class EnvWrapper : public Env {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
-  explicit EnvWrapper(Env* t) : target_(t) {}
+  explicit EnvWrapper(Env* t);
   ~EnvWrapper() override;
 
   // Return the target to which this Env forwards all calls
   Env* target() const { return target_; }
 
   // The following text is boilerplate that forwards all methods to target()
+  Status RegisterDbPaths(const std::vector<std::string>& paths) override {
+    return target_->RegisterDbPaths(paths);
+  }
+
+  Status UnregisterDbPaths(const std::vector<std::string>& paths) override {
+    return target_->UnregisterDbPaths(paths);
+  }
+
   Status NewSequentialFile(const std::string& f,
                            std::unique_ptr<SequentialFile>* r,
                            const EnvOptions& options) override {
@@ -1371,6 +1414,13 @@ class EnvWrapper : public Env {
     target_->SanitizeEnvOptions(env_opts);
   }
 
+  // Checks to see if the settings are valid for this set of options
+  Status ValidateOptions(const DBOptions& db_opts,
+                         const ColumnFamilyOptions& cf_opts) const override;
+
+ protected:
+  Configurable* Inner() const override { return target_; }
+
  private:
   Env* target_;
 };
@@ -1585,5 +1635,7 @@ Env* NewTimedEnv(Env* base_env);
 // This is a factory method for EnvLogger declared in logging/env_logging.h
 Status NewEnvLogger(const std::string& fname, Env* env,
                     std::shared_ptr<Logger>* result);
+
+std::unique_ptr<Env> NewCompositeEnv(std::shared_ptr<FileSystem> fs);
 
 }  // namespace ROCKSDB_NAMESPACE

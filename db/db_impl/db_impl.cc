@@ -21,7 +21,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -60,8 +59,6 @@
 #include "logging/auto_roll_logger.h"
 #include "logging/log_buffer.h"
 #include "logging/logging.h"
-#include "memtable/hash_linklist_rep.h"
-#include "memtable/hash_skiplist_rep.h"
 #include "monitoring/in_memory_stats_history.h"
 #include "monitoring/iostats_context_imp.h"
 #include "monitoring/perf_context_imp.h"
@@ -146,12 +143,13 @@ void DumpSupportInfo(Logger* logger) {
 }  // namespace
 
 DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
-               const bool seq_per_batch, const bool batch_per_txn)
+               const bool owns_info_log, const bool seq_per_batch,
+               const bool batch_per_txn)
     : dbname_(dbname),
-      own_info_log_(options.info_log == nullptr),
+      own_info_log_(owns_info_log || options.info_log == nullptr),
       initial_db_options_(SanitizeOptions(dbname, options)),
       env_(initial_db_options_.env),
-      fs_(initial_db_options_.file_system),
+      fs_(initial_db_options_.env->GetFileSystem()),
       immutable_db_options_(initial_db_options_),
       mutable_db_options_(initial_db_options_),
       stats_(immutable_db_options_.statistics.get()),
@@ -310,6 +308,11 @@ Status DBImpl::ResumeImpl() {
         immutable_db_options_.info_log,
         "DB resume requested but failed due to Fatal/Unrecoverable error");
     s = bg_error;
+  }
+
+  // Make sure the IO Status stored in version set is set to OK.
+  if (s.ok()) {
+    versions_->SetIOStatusOK();
   }
 
   // We cannot guarantee consistency of the WAL. So force flush Memtables of
@@ -890,9 +893,9 @@ void DBImpl::ScheduleBgLogWriterClose(JobContext* job_context) {
   }
 }
 
-Directory* DBImpl::GetDataDir(ColumnFamilyData* cfd, size_t path_id) const {
+FSDirectory* DBImpl::GetDataDir(ColumnFamilyData* cfd, size_t path_id) const {
   assert(cfd);
-  Directory* ret_dir = cfd->GetDataDir(path_id);
+  FSDirectory* ret_dir = cfd->GetDataDir(path_id);
   if (ret_dir == nullptr) {
     return directories_.GetDataDir(path_id);
   }
@@ -1147,25 +1150,25 @@ int DBImpl::FindMinimumEmptyLevelFitting(
 
 Status DBImpl::FlushWAL(bool sync) {
   if (manual_wal_flush_) {
-    Status s;
+    IOStatus io_s;
     {
       // We need to lock log_write_mutex_ since logs_ might change concurrently
       InstrumentedMutexLock wl(&log_write_mutex_);
       log::Writer* cur_log_writer = logs_.back().writer;
-      s = cur_log_writer->WriteBuffer();
+      io_s = cur_log_writer->WriteBuffer();
     }
-    if (!s.ok()) {
+    if (!io_s.ok()) {
       ROCKS_LOG_ERROR(immutable_db_options_.info_log, "WAL flush error %s",
-                      s.ToString().c_str());
+                      io_s.ToString().c_str());
       // In case there is a fs error we should set it globally to prevent the
       // future writes
-      WriteStatusCheck(s);
+      IOStatusCheck(io_s);
       // whether sync or not, we should abort the rest of function upon error
-      return s;
+      return std::move(io_s);
     }
     if (!sync) {
       ROCKS_LOG_DEBUG(immutable_db_options_.info_log, "FlushWAL sync=false");
-      return s;
+      return std::move(io_s);
     }
   }
   if (!sync) {
@@ -1217,14 +1220,23 @@ Status DBImpl::SyncWAL() {
   TEST_SYNC_POINT("DBWALTest::SyncWALNotWaitWrite:1");
   RecordTick(stats_, WAL_FILE_SYNCED);
   Status status;
+  IOStatus io_s;
   for (log::Writer* log : logs_to_sync) {
-    status = log->file()->SyncWithoutFlush(immutable_db_options_.use_fsync);
-    if (!status.ok()) {
+    io_s = log->file()->SyncWithoutFlush(immutable_db_options_.use_fsync);
+    if (!io_s.ok()) {
+      status = io_s;
       break;
     }
   }
+  if (!io_s.ok()) {
+    ROCKS_LOG_ERROR(immutable_db_options_.info_log, "WAL Sync error %s",
+                    io_s.ToString().c_str());
+    // In case there is a fs error we should set it globally to prevent the
+    // future writes
+    IOStatusCheck(io_s);
+  }
   if (status.ok() && need_log_dir_sync) {
-    status = directories_.GetWalDir()->Fsync();
+    status = directories_.GetWalDir()->Fsync(IOOptions(), nullptr);
   }
   TEST_SYNC_POINT("DBWALTest::SyncWALNotWaitWrite:2");
 
@@ -1249,7 +1261,7 @@ Status DBImpl::LockWAL() {
     // future writes
     WriteStatusCheck(status);
   }
-  return status;
+  return std::move(status);
 }
 
 Status DBImpl::UnlockWAL() {
@@ -1496,14 +1508,22 @@ ColumnFamilyHandle* DBImpl::PersistentStatsColumnFamily() const {
 Status DBImpl::Get(const ReadOptions& read_options,
                    ColumnFamilyHandle* column_family, const Slice& key,
                    PinnableSlice* value) {
+  return Get(read_options, column_family, key, value, /*timestamp=*/nullptr);
+}
+
+Status DBImpl::Get(const ReadOptions& read_options,
+                   ColumnFamilyHandle* column_family, const Slice& key,
+                   PinnableSlice* value, std::string* timestamp) {
   GetImplOptions get_impl_options;
   get_impl_options.column_family = column_family;
   get_impl_options.value = value;
-  return GetImpl(read_options, key, get_impl_options);
+  get_impl_options.timestamp = timestamp;
+  Status s = GetImpl(read_options, key, get_impl_options);
+  return s;
 }
 
 Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
-                       GetImplOptions get_impl_options) {
+                       GetImplOptions& get_impl_options) {
   assert(get_impl_options.value != nullptr ||
          get_impl_options.merge_operands != nullptr);
   PERF_CPU_TIMER_GUARD(get_cpu_nanos, env_);
@@ -1583,10 +1603,14 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   bool skip_memtable = (read_options.read_tier == kPersistedTier &&
                         has_unpersisted_data_.load(std::memory_order_relaxed));
   bool done = false;
+  const Comparator* comparator =
+      get_impl_options.column_family->GetComparator();
+  size_t ts_sz = comparator->timestamp_size();
+  std::string* timestamp = ts_sz > 0 ? get_impl_options.timestamp : nullptr;
   if (!skip_memtable) {
     // Get value associated with key
     if (get_impl_options.get_value) {
-      if (sv->mem->Get(lkey, get_impl_options.value->GetSelf(), &s,
+      if (sv->mem->Get(lkey, get_impl_options.value->GetSelf(), timestamp, &s,
                        &merge_context, &max_covering_tombstone_seq,
                        read_options, get_impl_options.callback,
                        get_impl_options.is_blob_index)) {
@@ -1594,9 +1618,10 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.value->PinSelf();
         RecordTick(stats_, MEMTABLE_HIT);
       } else if ((s.ok() || s.IsMergeInProgress()) &&
-                 sv->imm->Get(lkey, get_impl_options.value->GetSelf(), &s,
-                              &merge_context, &max_covering_tombstone_seq,
-                              read_options, get_impl_options.callback,
+                 sv->imm->Get(lkey, get_impl_options.value->GetSelf(),
+                              timestamp, &s, &merge_context,
+                              &max_covering_tombstone_seq, read_options,
+                              get_impl_options.callback,
                               get_impl_options.is_blob_index)) {
         done = true;
         get_impl_options.value->PinSelf();
@@ -1605,9 +1630,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     } else {
       // Get Merge Operands associated with key, Merge Operands should not be
       // merged and raw values should be returned to the user.
-      if (sv->mem->Get(lkey, nullptr, &s, &merge_context,
-                       &max_covering_tombstone_seq, read_options, nullptr,
-                       nullptr, false)) {
+      if (sv->mem->Get(lkey, /*value*/ nullptr, /*timestamp=*/nullptr, &s,
+                       &merge_context, &max_covering_tombstone_seq,
+                       read_options, nullptr, nullptr, false)) {
         done = true;
         RecordTick(stats_, MEMTABLE_HIT);
       } else if ((s.ok() || s.IsMergeInProgress()) &&
@@ -1626,8 +1651,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     sv->current->Get(
-        read_options, lkey, get_impl_options.value, &s, &merge_context,
-        &max_covering_tombstone_seq,
+        read_options, lkey, get_impl_options.value, timestamp, &s,
+        &merge_context, &max_covering_tombstone_seq,
         get_impl_options.get_value ? get_impl_options.value_found : nullptr,
         nullptr, nullptr,
         get_impl_options.get_value ? get_impl_options.callback : nullptr,
@@ -1675,12 +1700,20 @@ std::vector<Status> DBImpl::MultiGet(
     const ReadOptions& read_options,
     const std::vector<ColumnFamilyHandle*>& column_family,
     const std::vector<Slice>& keys, std::vector<std::string>* values) {
+  return MultiGet(read_options, column_family, keys, values,
+                  /*timestamps*/ nullptr);
+}
+
+std::vector<Status> DBImpl::MultiGet(
+    const ReadOptions& read_options,
+    const std::vector<ColumnFamilyHandle*>& column_family,
+    const std::vector<Slice>& keys, std::vector<std::string>* values,
+    std::vector<std::string>* timestamps) {
   PERF_CPU_TIMER_GUARD(get_cpu_nanos, env_);
   StopWatch sw(env_, stats_, DB_MULTIGET);
   PERF_TIMER_GUARD(get_snapshot_time);
 
   SequenceNumber consistent_seqnum;
-  ;
 
   std::unordered_map<uint32_t, MultiGetColumnFamilyData> multiget_cf_data(
       column_family.size());
@@ -1711,6 +1744,9 @@ std::vector<Status> DBImpl::MultiGet(
   size_t num_keys = keys.size();
   std::vector<Status> stat_list(num_keys);
   values->resize(num_keys);
+  if (timestamps) {
+    timestamps->resize(num_keys);
+  }
 
   // Keep track of bytes that we read for statistics-recording later
   uint64_t bytes_read = 0;
@@ -1725,8 +1761,9 @@ std::vector<Status> DBImpl::MultiGet(
     merge_context.Clear();
     Status& s = stat_list[i];
     std::string* value = &(*values)[i];
+    std::string* timestamp = timestamps ? &(*timestamps)[i] : nullptr;
 
-    LookupKey lkey(keys[i], consistent_seqnum);
+    LookupKey lkey(keys[i], consistent_seqnum, read_options.timestamp);
     auto cfh = reinterpret_cast<ColumnFamilyHandleImpl*>(column_family[i]);
     SequenceNumber max_covering_tombstone_seq = 0;
     auto mgd_iter = multiget_cf_data.find(cfh->cfd()->GetID());
@@ -1738,13 +1775,13 @@ std::vector<Status> DBImpl::MultiGet(
          has_unpersisted_data_.load(std::memory_order_relaxed));
     bool done = false;
     if (!skip_memtable) {
-      if (super_version->mem->Get(lkey, value, &s, &merge_context,
+      if (super_version->mem->Get(lkey, value, timestamp, &s, &merge_context,
                                   &max_covering_tombstone_seq, read_options)) {
         done = true;
         RecordTick(stats_, MEMTABLE_HIT);
-      } else if (super_version->imm->Get(lkey, value, &s, &merge_context,
-                                         &max_covering_tombstone_seq,
-                                         read_options)) {
+      } else if (super_version->imm->Get(
+                     lkey, value, timestamp, &s, &merge_context,
+                     &max_covering_tombstone_seq, read_options)) {
         done = true;
         RecordTick(stats_, MEMTABLE_HIT);
       }
@@ -1752,8 +1789,9 @@ std::vector<Status> DBImpl::MultiGet(
     if (!done) {
       PinnableSlice pinnable_val;
       PERF_TIMER_GUARD(get_from_output_files_time);
-      super_version->current->Get(read_options, lkey, &pinnable_val, &s,
-                                  &merge_context, &max_covering_tombstone_seq);
+      super_version->current->Get(read_options, lkey, &pinnable_val, timestamp,
+                                  &s, &merge_context,
+                                  &max_covering_tombstone_seq);
       value->assign(pinnable_val.data(), pinnable_val.size());
       RecordTick(stats_, MEMTABLE_MISS);
     }
@@ -1915,6 +1953,14 @@ void DBImpl::MultiGet(const ReadOptions& read_options, const size_t num_keys,
                       ColumnFamilyHandle** column_families, const Slice* keys,
                       PinnableSlice* values, Status* statuses,
                       const bool sorted_input) {
+  return MultiGet(read_options, num_keys, column_families, keys, values,
+                  /*timestamps*/ nullptr, statuses, sorted_input);
+}
+
+void DBImpl::MultiGet(const ReadOptions& read_options, const size_t num_keys,
+                      ColumnFamilyHandle** column_families, const Slice* keys,
+                      PinnableSlice* values, std::string* timestamps,
+                      Status* statuses, const bool sorted_input) {
   if (num_keys == 0) {
     return;
   }
@@ -1923,7 +1969,7 @@ void DBImpl::MultiGet(const ReadOptions& read_options, const size_t num_keys,
   sorted_keys.resize(num_keys);
   for (size_t i = 0; i < num_keys; ++i) {
     key_context.emplace_back(column_families[i], keys[i], &values[i],
-                             &statuses[i]);
+                             &timestamps[i], &statuses[i]);
   }
   for (size_t i = 0; i < num_keys; ++i) {
     sorted_keys[i] = &key_context[i];
@@ -2043,11 +2089,22 @@ void DBImpl::MultiGet(const ReadOptions& read_options,
                       ColumnFamilyHandle* column_family, const size_t num_keys,
                       const Slice* keys, PinnableSlice* values,
                       Status* statuses, const bool sorted_input) {
+  return MultiGet(read_options, column_family, num_keys, keys, values,
+                  /*timestamp=*/nullptr, statuses, sorted_input);
+}
+
+void DBImpl::MultiGet(const ReadOptions& read_options,
+                      ColumnFamilyHandle* column_family, const size_t num_keys,
+                      const Slice* keys, PinnableSlice* values,
+                      std::string* timestamps, Status* statuses,
+                      const bool sorted_input) {
   autovector<KeyContext, MultiGetContext::MAX_BATCH_SIZE> key_context;
   autovector<KeyContext*, MultiGetContext::MAX_BATCH_SIZE> sorted_keys;
   sorted_keys.resize(num_keys);
   for (size_t i = 0; i < num_keys; ++i) {
-    key_context.emplace_back(column_family, keys[i], &values[i], &statuses[i]);
+    key_context.emplace_back(column_family, keys[i], &values[i],
+                             timestamps ? &timestamps[i] : nullptr,
+                             &statuses[i]);
   }
   for (size_t i = 0; i < num_keys; ++i) {
     sorted_keys[i] = &key_context[i];
@@ -2301,7 +2358,7 @@ Status DBImpl::CreateColumnFamilyImpl(const ColumnFamilyOptions& cf_options,
       auto* cfd =
           versions_->GetColumnFamilySet()->GetColumnFamily(column_family_name);
       assert(cfd != nullptr);
-      std::map<std::string, std::shared_ptr<Directory>> dummy_created_dirs;
+      std::map<std::string, std::shared_ptr<FSDirectory>> dummy_created_dirs;
       s = cfd->AddDirectories(&dummy_created_dirs);
     }
     if (s.ok()) {
@@ -2436,7 +2493,8 @@ Status DBImpl::DropColumnFamilyImpl(ColumnFamilyHandle* column_family) {
 
 bool DBImpl::KeyMayExist(const ReadOptions& read_options,
                          ColumnFamilyHandle* column_family, const Slice& key,
-                         std::string* value, bool* value_found) {
+                         std::string* value, std::string* timestamp,
+                         bool* value_found) {
   assert(value != nullptr);
   if (value_found != nullptr) {
     // falsify later if key-may-exist but can't fetch value
@@ -2449,6 +2507,7 @@ bool DBImpl::KeyMayExist(const ReadOptions& read_options,
   get_impl_options.column_family = column_family;
   get_impl_options.value = &pinnable_val;
   get_impl_options.value_found = value_found;
+  get_impl_options.timestamp = timestamp;
   auto s = GetImpl(roptions, key, get_impl_options);
   value->assign(pinnable_val.data(), pinnable_val.size());
 
@@ -3462,12 +3521,8 @@ Status DBImpl::Close() {
 Status DB::ListColumnFamilies(const DBOptions& db_options,
                               const std::string& name,
                               std::vector<std::string>* column_families) {
-  FileSystem* fs = db_options.file_system.get();
-  LegacyFileSystemWrapper legacy_fs(db_options.env);
-  if (!fs) {
-    fs = &legacy_fs;
-  }
-  return VersionSet::ListColumnFamilies(column_families, name, fs);
+  const std::shared_ptr<FileSystem>& fs = db_options.env->GetFileSystem();
+  return VersionSet::ListColumnFamilies(column_families, name, fs.get());
 }
 
 Snapshot::~Snapshot() {}
@@ -3511,24 +3566,15 @@ Status DestroyDB(const std::string& dbname, const Options& options,
       }
     }
 
-    std::vector<std::string> paths;
-
-    for (const auto& path : options.db_paths) {
-      paths.emplace_back(path.path);
+    std::set<std::string> paths;
+    for (const DbPath& db_path : options.db_paths) {
+      paths.insert(db_path.path);
     }
-    for (const auto& cf : column_families) {
-      for (const auto& path : cf.options.cf_paths) {
-        paths.emplace_back(path.path);
+    for (const ColumnFamilyDescriptor& cf : column_families) {
+      for (const DbPath& cf_path : cf.options.cf_paths) {
+        paths.insert(cf_path.path);
       }
     }
-
-    // Remove duplicate paths.
-    // Note that we compare only the actual paths but not path ids.
-    // This reason is that same path can appear at different path_ids
-    // for different column families.
-    std::sort(paths.begin(), paths.end());
-    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
-
     for (const auto& path : paths) {
       if (env->GetChildren(path, &filenames).ok()) {
         for (const auto& fname : filenames) {
@@ -3819,8 +3865,9 @@ Status DBImpl::GetLatestSequenceForKey(SuperVersion* sv, const Slice& key,
   *found_record_for_key = false;
 
   // Check if there is a record for this key in the latest memtable
-  sv->mem->Get(lkey, nullptr, &s, &merge_context, &max_covering_tombstone_seq,
-               seq, read_options, nullptr /*read_callback*/, is_blob_index);
+  sv->mem->Get(lkey, nullptr, nullptr, &s, &merge_context,
+               &max_covering_tombstone_seq, seq, read_options,
+               nullptr /*read_callback*/, is_blob_index);
 
   if (!(s.ok() || s.IsNotFound() || s.IsMergeInProgress())) {
     // unexpected error reading memtable.
@@ -3845,8 +3892,9 @@ Status DBImpl::GetLatestSequenceForKey(SuperVersion* sv, const Slice& key,
   }
 
   // Check if there is a record for this key in the immutable memtables
-  sv->imm->Get(lkey, nullptr, &s, &merge_context, &max_covering_tombstone_seq,
-               seq, read_options, nullptr /*read_callback*/, is_blob_index);
+  sv->imm->Get(lkey, nullptr, nullptr, &s, &merge_context,
+               &max_covering_tombstone_seq, seq, read_options,
+               nullptr /*read_callback*/, is_blob_index);
 
   if (!(s.ok() || s.IsNotFound() || s.IsMergeInProgress())) {
     // unexpected error reading memtable.
@@ -3871,7 +3919,7 @@ Status DBImpl::GetLatestSequenceForKey(SuperVersion* sv, const Slice& key,
   }
 
   // Check if there is a record for this key in the immutable memtables
-  sv->imm->GetFromHistory(lkey, nullptr, &s, &merge_context,
+  sv->imm->GetFromHistory(lkey, nullptr, nullptr, &s, &merge_context,
                           &max_covering_tombstone_seq, seq, read_options,
                           is_blob_index);
 
@@ -3899,7 +3947,7 @@ Status DBImpl::GetLatestSequenceForKey(SuperVersion* sv, const Slice& key,
   // SST files if cache_only=true?
   if (!cache_only) {
     // Check tables
-    sv->current->Get(read_options, lkey, nullptr, &s, &merge_context,
+    sv->current->Get(read_options, lkey, nullptr, nullptr, &s, &merge_context,
                      &max_covering_tombstone_seq, nullptr /* value_found */,
                      found_record_for_key, seq, nullptr /*read_callback*/,
                      is_blob_index);

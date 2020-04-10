@@ -1288,6 +1288,10 @@ TEST_F(DBTest2, CompressionOptions) {
   const int kValSize = 20;
   Random rnd(301);
 
+  std::vector<uint32_t> compression_parallel_threads = {1, 4};
+
+  std::map<std::string, std::string> key_value_written;
+
   for (int iter = 0; iter <= 2; iter++) {
     listener->max_level_checked = 0;
 
@@ -1312,19 +1316,37 @@ TEST_F(DBTest2, CompressionOptions) {
       options.bottommost_compression = kDisableCompressionOption;
     }
 
-    DestroyAndReopen(options);
-    // Write 10 random files
-    for (int i = 0; i < 10; i++) {
-      for (int j = 0; j < 5; j++) {
-        ASSERT_OK(
-            Put(RandomString(&rnd, kKeySize), RandomString(&rnd, kValSize)));
-      }
-      ASSERT_OK(Flush());
-      dbfull()->TEST_WaitForCompact();
-    }
+    for (auto num_threads : compression_parallel_threads) {
+      options.compression_opts.parallel_threads = num_threads;
+      options.bottommost_compression_opts.parallel_threads = num_threads;
 
-    // Make sure that we wrote enough to check all 7 levels
-    ASSERT_EQ(listener->max_level_checked, 6);
+      DestroyAndReopen(options);
+      // Write 10 random files
+      for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < 5; j++) {
+          std::string key = RandomString(&rnd, kKeySize);
+          std::string value = RandomString(&rnd, kValSize);
+          key_value_written[key] = value;
+          ASSERT_OK(Put(key, value));
+        }
+        ASSERT_OK(Flush());
+        dbfull()->TEST_WaitForCompact();
+      }
+
+      // Make sure that we wrote enough to check all 7 levels
+      ASSERT_EQ(listener->max_level_checked, 6);
+
+      // Make sure database content is the same as key_value_written
+      std::unique_ptr<Iterator> db_iter(db_->NewIterator(ReadOptions()));
+      for (db_iter->SeekToFirst(); db_iter->Valid(); db_iter->Next()) {
+        std::string key = db_iter->key().ToString();
+        std::string value = db_iter->value().ToString();
+        ASSERT_NE(key_value_written.find(key), key_value_written.end());
+        ASSERT_EQ(key_value_written[key], value);
+        key_value_written.erase(key);
+      }
+      ASSERT_EQ(0, key_value_written.size());
+    }
   }
 }
 
@@ -1678,12 +1700,12 @@ TEST_P(PinL0IndexAndFilterBlocksTest, DisablePrefetchingNonL0IndexAndFilter) {
     ASSERT_EQ(fm + 3, TestGetTickerCount(options, BLOCK_CACHE_FILTER_MISS));
     ASSERT_EQ(fh, TestGetTickerCount(options, BLOCK_CACHE_FILTER_HIT));
     ASSERT_EQ(im + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_MISS));
-    ASSERT_EQ(ih + 2, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
+    ASSERT_EQ(ih + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
   } else {
     ASSERT_EQ(fm + 3, TestGetTickerCount(options, BLOCK_CACHE_FILTER_MISS));
     ASSERT_EQ(fh + 1, TestGetTickerCount(options, BLOCK_CACHE_FILTER_HIT));
     ASSERT_EQ(im + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_MISS));
-    ASSERT_EQ(ih + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
+    ASSERT_EQ(ih + 4, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
   }
 
   // Bloom and index hit will happen when a Get() happens.
@@ -1692,12 +1714,12 @@ TEST_P(PinL0IndexAndFilterBlocksTest, DisablePrefetchingNonL0IndexAndFilter) {
     ASSERT_EQ(fm + 3, TestGetTickerCount(options, BLOCK_CACHE_FILTER_MISS));
     ASSERT_EQ(fh + 1, TestGetTickerCount(options, BLOCK_CACHE_FILTER_HIT));
     ASSERT_EQ(im + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_MISS));
-    ASSERT_EQ(ih + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
+    ASSERT_EQ(ih + 4, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
   } else {
     ASSERT_EQ(fm + 3, TestGetTickerCount(options, BLOCK_CACHE_FILTER_MISS));
     ASSERT_EQ(fh + 2, TestGetTickerCount(options, BLOCK_CACHE_FILTER_HIT));
     ASSERT_EQ(im + 3, TestGetTickerCount(options, BLOCK_CACHE_INDEX_MISS));
-    ASSERT_EQ(ih + 4, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
+    ASSERT_EQ(ih + 5, TestGetTickerCount(options, BLOCK_CACHE_INDEX_HIT));
   }
 }
 
@@ -2635,11 +2657,11 @@ TEST_F(DBTest2, OptimizeForSmallDB) {
   options.OptimizeForSmallDb();
 
   // Find the cache object
-  ASSERT_EQ(std::string(BlockBasedTableFactory::kName),
+  ASSERT_EQ(TableFactory::kBlockBasedTableName,
             std::string(options.table_factory->Name()));
-  BlockBasedTableOptions* table_options =
-      reinterpret_cast<BlockBasedTableOptions*>(
-          options.table_factory->GetOptions());
+  auto* table_options =
+      options.table_factory->GetOptions<BlockBasedTableOptions>(
+          TableFactory::kBlockBasedTableOpts);
   ASSERT_TRUE(table_options != nullptr);
   std::shared_ptr<Cache> cache = table_options->block_cache;
 
@@ -3937,6 +3959,7 @@ TEST_F(DBTest2, MultiDBParallelOpenTest) {
 namespace {
 class DummyOldStats : public Statistics {
  public:
+  const char* Name() const override { return "DummyOldStats"; }
   uint64_t getTickerCount(uint32_t /*ticker_type*/) const override { return 0; }
   void recordTick(uint32_t /* ticker_type */, uint64_t /* count */) override {
     num_rt++;

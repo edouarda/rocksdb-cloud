@@ -203,16 +203,25 @@ else()
 endif()
 
 include(CheckCCompilerFlag)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
+  CHECK_C_COMPILER_FLAG("-mcpu=power9" HAS_POWER9)
+  if(HAS_POWER9)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=power9 -mtune=power9")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=power9 -mtune=power9")
+  else()
+    CHECK_C_COMPILER_FLAG("-mcpu=power8" HAS_POWER8)
+    if(HAS_POWER8)
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=power8 -mtune=power8")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=power8 -mtune=power8")
+    endif(HAS_POWER8)
+  endif(HAS_POWER9)
   CHECK_C_COMPILER_FLAG("-maltivec" HAS_ALTIVEC)
   if(HAS_ALTIVEC)
     message(STATUS " HAS_ALTIVEC yes")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -maltivec")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -maltivec")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=power8")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=power8")
   endif(HAS_ALTIVEC)
-endif(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
+endif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
         CHECK_C_COMPILER_FLAG("-march=armv8-a+crc+crypto" HAS_ARMV8_CRC)
@@ -235,7 +244,7 @@ else()
   if(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
   else()
-    if(NOT HAVE_POWER8 AND NOT HAS_ARMV8_CRC)
+    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64" AND NOT HAS_ARMV8_CRC)
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
     endif()
   endif()
@@ -481,6 +490,11 @@ if(HAVE_SCHED_GETCPU)
   add_definitions(-DROCKSDB_SCHED_GETCPU_PRESENT)
 endif()
 
+check_cxx_symbol_exists(getauxval auvx.h HAVE_AUXV_GETAUXVAL)
+if(HAVE_AUXV_GETAUXVAL)
+  add_definitions(-DROCKSDB_AUXV_GETAUXVAL_PRESENT)
+endif()
+
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/third-party/gtest-1.8.1/fused-src)
@@ -492,10 +506,14 @@ find_package(Threads REQUIRED)
 # Main library source code
 
 set(SOURCES
+        cache/cache.cc
         cache/clock_cache.cc
         cache/lru_cache.cc
         cache/sharded_cache.cc
         db/arena_wrapped_db_iter.cc
+        db/blob/blob_file_addition.cc
+        db/blob/blob_file_garbage.cc
+        db/blob/blob_file_meta.cc
         db/builder.cc
         db/c.cc
         db/column_family.cc
@@ -520,6 +538,7 @@ set(SOURCES
         db/db_impl/db_impl_secondary.cc
         db/db_info_dumper.cc
         db/db_iter.cc
+        db/db_plugin.cc
         db/dbformat.cc
         db/error_handler.cc
         db/event_helpers.cc
@@ -549,6 +568,7 @@ set(SOURCES
         db/trim_history_scheduler.cc
         db/version_builder.cc
         db/version_edit.cc
+        db/version_edit_handler.cc
         db/version_set.cc
         db/wal_manager.cc
         db/write_batch.cc
@@ -597,19 +617,23 @@ set(SOURCES
         monitoring/thread_status_util.cc
         monitoring/thread_status_util_debug.cc
         options/cf_options.cc
+        options/configurable.cc
+        options/customizable.cc
         options/db_options.cc
         options/options.cc
         options/options_helper.cc
         options/options_parser.cc
-        options/options_sanity_check.cc
         port/stack_trace.cc
         table/adaptive/adaptive_table_factory.cc
+        table/block_based/binary_search_index_reader.cc
         table/block_based/block.cc
         table/block_based/block_based_filter_block.cc
         table/block_based/block_based_table_builder.cc
         table/block_based/block_based_table_factory.cc
+        table/block_based/block_based_table_iterator.cc
         table/block_based/block_based_table_reader.cc
         table/block_based/block_builder.cc
+        table/block_based/block_prefetcher.cc
         table/block_based/block_prefix_index.cc
         table/block_based/data_block_hash_index.cc
         table/block_based/data_block_footer.cc
@@ -617,9 +641,14 @@ set(SOURCES
         table/block_based/filter_policy.cc
         table/block_based/flush_block_policy.cc
         table/block_based/full_filter_block.cc
+        table/block_based/hash_index_reader.cc
         table/block_based/index_builder.cc
+        table/block_based/index_reader_common.cc
         table/block_based/parsed_full_filter_block.cc
         table/block_based/partitioned_filter_block.cc
+        table/block_based/partitioned_index_iterator.cc
+        table/block_based/partitioned_index_reader.cc
+        table/block_based/reader_common.cc
         table/block_based/uncompression_dict_reader.cc
         table/block_fetcher.cc
         table/cuckoo/cuckoo_table_builder.cc
@@ -639,6 +668,7 @@ set(SOURCES
         table/plain/plain_table_reader.cc
         table/sst_file_reader.cc
         table/sst_file_writer.cc
+        table/table_factory.cc
         table/table_properties.cc
         table/two_level_iterator.cc
         test_util/sync_point.cc
@@ -682,15 +712,18 @@ set(SOURCES
         utilities/blob_db/blob_log_writer.cc
         utilities/blob_db/blob_log_format.cc
         utilities/cassandra/cassandra_compaction_filter.cc
+        utilities/cassandra/cassandra_options.cc
         utilities/cassandra/format.cc
         utilities/cassandra/merge_operator.cc
         utilities/checkpoint/checkpoint_impl.cc
+        utilities/compaction_filters.cc
         utilities/compaction_filters/remove_emptyvalue_compactionfilter.cc
         utilities/debug.cc
         utilities/env_mirror.cc
         utilities/env_timed.cc
         utilities/leveldb_options/leveldb_options.cc
         utilities/memory/memory_util.cc
+        utilities/merge_operators.cc
         utilities/merge_operators/bytesxor.cc
         utilities/merge_operators/max.cc
         utilities/merge_operators/put.cc
@@ -734,11 +767,11 @@ if(HAVE_SSE42 AND NOT MSVC)
     PROPERTIES COMPILE_FLAGS "-msse4.2 -mpclmul")
 endif()
 
-if(HAVE_POWER8)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
   list(APPEND SOURCES
     util/crc32c_ppc.c
     util/crc32c_ppc_asm.S)
-endif(HAVE_POWER8)
+endif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
 
 if(HAS_ARMV8_CRC)
   list(APPEND SOURCES
@@ -919,6 +952,9 @@ if(WITH_TESTS)
   set(TESTS
         cache/cache_test.cc
         cache/lru_cache_test.cc
+        db/blob/blob_file_addition_test.cc
+        db/blob/blob_file_garbage_test.cc
+        db/blob/db_blob_index_test.cc
         db/column_family_test.cc
         db/compact_files_test.cc
         db/compaction/compaction_job_stats_test.cc
@@ -929,7 +965,7 @@ if(WITH_TESTS)
         db/corruption_test.cc
         db/cuckoo_table_db_test.cc
         db/db_basic_test.cc
-        db/db_blob_index_test.cc
+        db/db_with_timestamp_basic_test.cc
         db/db_block_cache_test.cc
         db/db_bloom_filter_test.cc
         db/db_compaction_filter_test.cc
@@ -946,6 +982,7 @@ if(WITH_TESTS)
         db/db_merge_operator_test.cc
         db/db_merge_operand_test.cc
         db/db_options_test.cc
+        db/db_plugin_test.cc
         db/db_properties_test.cc
         db/db_range_del_test.cc
         db/db_impl/db_secondary_test.cc
@@ -955,12 +992,13 @@ if(WITH_TESTS)
         db/db_tailing_iter_test.cc
         db/db_test.cc
         db/db_test2.cc
+        db/db_logical_block_size_cache_test.cc
         db/db_universal_compaction_test.cc
         db/db_wal_test.cc
         db/db_write_test.cc
         db/dbformat_test.cc
         db/deletefile_test.cc
-        db/error_handler_test.cc
+        db/error_handler_fs_test.cc
         db/obsolete_files_test.cc
         db/external_sst_file_basic_test.cc
         db/external_sst_file_test.cc
@@ -991,8 +1029,10 @@ if(WITH_TESTS)
         db/write_controller_test.cc
         env/env_basic_test.cc
         env/env_test.cc
+        env/io_posix_test.cc
         env/mock_env_test.cc
         file/delete_scheduler_test.cc
+        file/random_access_file_reader_test.cc
         logging/auto_roll_logger_test.cc
         logging/env_logger_test.cc
         logging/event_logger_test.cc
@@ -1004,6 +1044,8 @@ if(WITH_TESTS)
         monitoring/iostats_context_test.cc
         monitoring/statistics_test.cc
         monitoring/stats_history_test.cc
+        options/configurable_test.cc
+        options/customizable_test.cc
         options/options_settable_test.cc
         options/options_test.cc
         table/block_based/block_based_filter_block_test.cc
@@ -1038,8 +1080,10 @@ if(WITH_TESTS)
         util/slice_test.cc
         util/slice_transform_test.cc
         util/timer_queue_test.cc
+        util/timer_test.cc
         util/thread_list_test.cc
         util/thread_local_test.cc
+        util/work_queue_test.cc
         utilities/backupable/backupable_db_test.cc
         utilities/blob_db/blob_db_test.cc
         utilities/cassandra/cassandra_functional_test.cc
@@ -1059,6 +1103,7 @@ if(WITH_TESTS)
         utilities/table_properties_collectors/compact_on_deletion_collector_test.cc
         utilities/transactions/optimistic_transaction_test.cc
         utilities/transactions/transaction_test.cc
+        utilities/transactions/transaction_lock_mgr_test.cc
         utilities/transactions/write_prepared_transaction_test.cc
         utilities/transactions/write_unprepared_transaction_test.cc
         utilities/ttl/ttl_test.cc
@@ -1077,6 +1122,7 @@ if(WITH_TESTS)
       monitoring/thread_status_updater_debug.cc
       table/mock_table.cc
       test_util/fault_injection_test_env.cc
+      test_util/fault_injection_test_fs.cc
       utilities/cassandra/test_utils.cc
   )
   enable_testing()

@@ -256,10 +256,21 @@ DEFINE_int32(clear_column_family_one_in, 1000000,
              "it again. If N == 0, never drop/create column families. "
              "When test_batches_snapshots is true, this flag has no effect");
 
-DEFINE_int32(get_live_files_and_wal_files_one_in, 1000000,
-             "With a chance of 1/N, call GetLiveFiles, GetSortedWalFiles "
-             "and GetCurrentWalFile to verify if it returns correctly. If "
-             "N == 0, never call the three interfaces.");
+DEFINE_int32(get_live_files_one_in, 1000000,
+             "With a chance of 1/N, call GetLiveFiles to verify if it returns "
+             "correctly. If N == 0, do not call the interface.");
+
+DEFINE_int32(
+    get_sorted_wal_files_one_in, 1000000,
+    "With a chance of 1/N, call GetSortedWalFiles to verify if it returns "
+    "correctly. (Note that this API may legitimately return an error.) If N == "
+    "0, do not call the interface.");
+
+DEFINE_int32(
+    get_current_wal_file_one_in, 1000000,
+    "With a chance of 1/N, call GetCurrentWalFile to verify if it returns "
+    "correctly. (Note that this API may legitimately return an error.) If N == "
+    "0, do not call the interface.");
 
 DEFINE_int32(set_options_one_in, 0,
              "With a chance of 1/N, change some random options");
@@ -429,6 +440,14 @@ DEFINE_uint64(rate_limiter_bytes_per_sec, 0, "Set options.rate_limiter value.");
 
 DEFINE_bool(rate_limit_bg_reads, false,
             "Use options.rate_limiter on compaction reads");
+
+DEFINE_uint64(sst_file_manager_bytes_per_sec, 0,
+              "Set `Options::sst_file_manager` to delete at this rate. By "
+              "default the deletion rate is unbounded.");
+
+DEFINE_uint64(sst_file_manager_bytes_per_truncate, 0,
+              "Set `Options::sst_file_manager` to delete in chunks of this "
+              "many bytes. By default whole files will be deleted.");
 
 DEFINE_bool(use_txn, false,
             "Use TransactionDB. Currently the default write policy is "

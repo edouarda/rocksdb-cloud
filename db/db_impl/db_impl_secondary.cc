@@ -17,8 +17,8 @@ namespace ROCKSDB_NAMESPACE {
 
 #ifndef ROCKSDB_LITE
 DBImplSecondary::DBImplSecondary(const DBOptions& db_options,
-                                 const std::string& dbname)
-    : DBImpl(db_options, dbname) {
+                                 const std::string& dbname, bool owns_info_log)
+    : DBImpl(db_options, dbname, owns_info_log) {
   ROCKS_LOG_INFO(immutable_db_options_.info_log,
                  "Opening the db in secondary mode");
   LogFlush(immutable_db_options_.info_log);
@@ -340,15 +340,16 @@ Status DBImplSecondary::GetImpl(const ReadOptions& read_options,
   PERF_TIMER_STOP(get_snapshot_time);
 
   bool done = false;
-  if (super_version->mem->Get(lkey, pinnable_val->GetSelf(), &s, &merge_context,
+  if (super_version->mem->Get(lkey, pinnable_val->GetSelf(),
+                              /*timestamp=*/nullptr, &s, &merge_context,
                               &max_covering_tombstone_seq, read_options)) {
     done = true;
     pinnable_val->PinSelf();
     RecordTick(stats_, MEMTABLE_HIT);
   } else if ((s.ok() || s.IsMergeInProgress()) &&
              super_version->imm->Get(
-                 lkey, pinnable_val->GetSelf(), &s, &merge_context,
-                 &max_covering_tombstone_seq, read_options)) {
+                 lkey, pinnable_val->GetSelf(), /*timestamp=*/nullptr, &s,
+                 &merge_context, &max_covering_tombstone_seq, read_options)) {
     done = true;
     pinnable_val->PinSelf();
     RecordTick(stats_, MEMTABLE_HIT);
@@ -359,8 +360,9 @@ Status DBImplSecondary::GetImpl(const ReadOptions& read_options,
   }
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
-    super_version->current->Get(read_options, lkey, pinnable_val, &s,
-                                &merge_context, &max_covering_tombstone_seq);
+    super_version->current->Get(read_options, lkey, pinnable_val,
+                                /*timestamp=*/nullptr, &s, &merge_context,
+                                &max_covering_tombstone_seq);
     RecordTick(stats_, MEMTABLE_MISS);
   }
   {
@@ -596,15 +598,18 @@ Status DB::OpenAsSecondary(
 
   DBOptions tmp_opts(db_options);
   Status s;
+  bool owns_info_log = false;
   if (nullptr == tmp_opts.info_log) {
     s = CreateLoggerFromOptions(secondary_path, tmp_opts, &tmp_opts.info_log);
     if (!s.ok()) {
       tmp_opts.info_log = nullptr;
+    } else {
+      owns_info_log = true;
     }
   }
 
   handles->clear();
-  DBImplSecondary* impl = new DBImplSecondary(tmp_opts, dbname);
+  DBImplSecondary* impl = new DBImplSecondary(tmp_opts, dbname, owns_info_log);
   impl->versions_.reset(new ReactiveVersionSet(
       dbname, &impl->immutable_db_options_, impl->file_options_,
       impl->table_cache_.get(), impl->write_buffer_manager_,

@@ -12,17 +12,22 @@
 #include <algorithm>
 #include <memory>
 #include "logging/logging.h"
+#include "options/customizable_helper.h"
 #include "port/port.h"
 #include "rocksdb/slice.h"
 
 namespace ROCKSDB_NAMESPACE {
 
+const std::string Comparator::kBytewiseComparatorName = "leveldb.BytewiseComparator";
+const std::string Comparator::kReverseComparatorName = "rocksdb.ReverseBytewiseComparator";
+
 namespace {
+
 class BytewiseComparatorImpl : public Comparator {
  public:
   BytewiseComparatorImpl() { }
 
-  const char* Name() const override { return "leveldb.BytewiseComparator"; }
+  const char* Name() const override { return kBytewiseComparatorName.c_str(); }
 
   int Compare(const Slice& a, const Slice& b) const override {
     return a.compare(b);
@@ -125,7 +130,9 @@ class BytewiseComparatorImpl : public Comparator {
     return false;
   }
 
-  int CompareWithoutTimestamp(const Slice& a, const Slice& b) const override {
+  using Comparator::CompareWithoutTimestamp;
+  int CompareWithoutTimestamp(const Slice& a, bool /*a_has_ts*/, const Slice& b,
+                              bool /*b_has_ts*/) const override {
     return a.compare(b);
   }
 };
@@ -135,7 +142,7 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
   ReverseBytewiseComparatorImpl() { }
 
   const char* Name() const override {
-    return "rocksdb.ReverseBytewiseComparator";
+    return kReverseComparatorName.c_str();
   }
 
   int Compare(const Slice& a, const Slice& b) const override {
@@ -197,7 +204,9 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
     return false;
   }
 
-  int CompareWithoutTimestamp(const Slice& a, const Slice& b) const override {
+  using Comparator::CompareWithoutTimestamp;
+  int CompareWithoutTimestamp(const Slice& a, bool /*a_has_ts*/, const Slice& b,
+                              bool /*b_has_ts*/) const override {
     return -a.compare(b);
   }
 };
@@ -213,4 +222,24 @@ const Comparator* ReverseBytewiseComparator() {
   return &rbytewise;
 }
 
+static bool LoadComparator(const std::string& id, Comparator** result) {
+  bool success = true;
+  if (id == Comparator::kBytewiseComparatorName) {
+    *result = const_cast<Comparator*>(BytewiseComparator());
+  } else if (id == Comparator::kReverseComparatorName) {
+    *result = const_cast<Comparator*>(ReverseBytewiseComparator());
+  } else {
+    success = false;
+  }
+  return success;
+}
+
+Status Comparator::CreateFromString(const std::string& value,
+                                    const ConfigOptions& opts,
+                                    const Comparator** result) {
+  Comparator** comparator = const_cast<Comparator**>(result);
+  Status s =
+      LoadStaticObject<Comparator>(value, LoadComparator, opts, comparator);
+  return s;
+}
 }  // namespace ROCKSDB_NAMESPACE

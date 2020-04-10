@@ -48,7 +48,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-class FileChecksumFuncCrc32c;
+class FileChecksumGenCrc32c;
+class FileChecksumGenCrc32cFactory;
 
 const std::string LDBCommand::ARG_ENV_URI = "env_uri";
 const std::string LDBCommand::ARG_DB = "db";
@@ -286,16 +287,14 @@ void LDBCommand::Run() {
 
   if (!options_.env || options_.env == Env::Default()) {
     Env* env = Env::Default();
-    Status s = Env::LoadEnv(env_uri_, &env, &env_guard_);
-    if (!s.ok() && !s.IsNotFound()) {
+    Status s = Env::CreateFromString(env_uri_, cfg_options_, &env, &env_guard_);
+    if (!s.ok() && !s.IsNotSupported()) {
       fprintf(stderr, "LoadEnv: %s\n", s.ToString().c_str());
       exec_state_ = LDBCommandExecuteResult::Failed(s.ToString());
       return;
     }
     options_.env = env;
   }
-
-  options_.file_system.reset(new LegacyFileSystemWrapper(options_.env));
 
   if (db_ == nullptr && !NoDBOpen()) {
     OpenDB();
@@ -331,7 +330,6 @@ LDBCommand::LDBCommand(const std::map<std::string, std::string>& options,
       is_db_ttl_(false),
       timestamp_(false),
       try_load_options_(false),
-      ignore_unknown_options_(false),
       create_if_missing_(false),
       option_map_(options),
       flags_(flags),
@@ -364,13 +362,15 @@ LDBCommand::LDBCommand(const std::map<std::string, std::string>& options,
   is_db_ttl_ = IsFlagPresent(flags, ARG_TTL);
   timestamp_ = IsFlagPresent(flags, ARG_TIMESTAMP);
   try_load_options_ = IsFlagPresent(flags, ARG_TRY_LOAD_OPTIONS);
-  ignore_unknown_options_ = IsFlagPresent(flags, ARG_IGNORE_UNKNOWN_OPTIONS);
+  cfg_options_.ignore_unknown_options =
+      IsFlagPresent(flags, ARG_IGNORE_UNKNOWN_OPTIONS);
+  cfg_options_.registry = options_.object_registry;
 }
 
 void LDBCommand::OpenDB() {
   if (!create_if_missing_ && try_load_options_) {
-    Status s = LoadLatestOptions(db_path_, options_.env, &options_,
-                                 &column_families_, ignore_unknown_options_);
+    Status s = LoadLatestOptions(db_path_, options_.env, cfg_options_,
+                                 &options_, &column_families_);
     if (!s.ok() && !s.IsNotFound()) {
       // Option file exists but load option file error.
       std::string msg = s.ToString();
@@ -1170,7 +1170,7 @@ void GetLiveFilesChecksumInfoFromVersionSet(Options options,
                       /*block_cache_tracer=*/nullptr);
   std::vector<std::string> cf_name_list;
   s = versions.ListColumnFamilies(&cf_name_list, db_path,
-                                  options.file_system.get());
+                                  immutable_db_options.fs.get());
   if (s.ok()) {
     std::vector<ColumnFamilyDescriptor> cf_list;
     for (const auto& name : cf_name_list) {
@@ -1749,7 +1749,7 @@ void DBDumperCommand::DoDumpCommand() {
       break;
     if (is_db_ttl_) {
       TtlIterator* it_ttl = static_cast_with_check<TtlIterator, Iterator>(iter);
-      rawtime = it_ttl->timestamp();
+      rawtime = it_ttl->ttl_timestamp();
       if (rawtime < ttl_start || rawtime >= ttl_end) {
         continue;
       }
@@ -1913,8 +1913,6 @@ void ReduceDBLevelsCommand::DoCommand() {
   Status st;
   Options opt = PrepareOptionsForOpenDB();
   int old_level_num = -1;
-  opt.file_system.reset(new LegacyFileSystemWrapper(opt.env));
-  ;
   st = GetOldNumOfLevels(opt, &old_level_num);
   if (!st.ok()) {
     exec_state_ = LDBCommandExecuteResult::Failed(st.ToString());
@@ -2578,7 +2576,7 @@ void ScanCommand::DoCommand() {
         it->Next()) {
     if (is_db_ttl_) {
       TtlIterator* it_ttl = static_cast_with_check<TtlIterator, Iterator>(it);
-      int rawtime = it_ttl->timestamp();
+      int rawtime = it_ttl->ttl_timestamp();
       if (rawtime < ttl_start || rawtime >= ttl_end) {
         continue;
       }
@@ -3003,7 +3001,8 @@ void BackupCommand::DoCommand() {
   }
   fprintf(stdout, "open db OK\n");
   Env* custom_env = nullptr;
-  Env::LoadEnv(backup_env_uri_, &custom_env, &backup_env_guard_);
+  Env::CreateFromString(backup_env_uri_, cfg_options_, &custom_env,
+                        &backup_env_guard_);
   assert(custom_env != nullptr);
 
   BackupableDBOptions backup_options =
@@ -3040,7 +3039,8 @@ void RestoreCommand::Help(std::string& ret) {
 
 void RestoreCommand::DoCommand() {
   Env* custom_env = nullptr;
-  Env::LoadEnv(backup_env_uri_, &custom_env, &backup_env_guard_);
+  Env::CreateFromString(backup_env_uri_, cfg_options_, &custom_env,
+                        &backup_env_guard_);
   assert(custom_env != nullptr);
 
   std::unique_ptr<BackupEngineReadOnly> restore_engine;

@@ -24,7 +24,7 @@
 #endif
 
 #include "cache/lru_cache.h"
-#include "db/blob_index.h"
+#include "db/blob/blob_index.h"
 #include "db/db_impl/db_impl.h"
 #include "db/db_test_util.h"
 #include "db/dbformat.h"
@@ -33,7 +33,6 @@
 #include "db/write_batch_internal.h"
 #include "env/mock_env.h"
 #include "file/filename.h"
-#include "memtable/hash_linklist_rep.h"
 #include "monitoring/thread_status_util.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
@@ -55,7 +54,6 @@
 #include "rocksdb/utilities/checkpoint.h"
 #include "rocksdb/utilities/optimistic_transaction_db.h"
 #include "rocksdb/utilities/write_batch_with_index.h"
-#include "table/block_based/block_based_table_factory.h"
 #include "table/mock_table.h"
 #include "table/plain/plain_table_factory.h"
 #include "table/scoped_arena_iterator.h"
@@ -4301,7 +4299,7 @@ TEST_P(DBTestWithParam, PreShutdownManualCompaction) {
     ASSERT_EQ("1,1,1", FilesPerLevel(1));
 
     // Compaction range overlaps files
-    Compact(1, "p1", "p9");
+    Compact(1, "p", "q");
     ASSERT_EQ("0,0,1", FilesPerLevel(1));
 
     // Populate a different range
@@ -5374,6 +5372,8 @@ class DelayedMergeOperator : public MergeOperator {
   const char* Name() const override { return "DelayedMergeOperator"; }
 };
 
+// TODO: hangs in CircleCI's Windows env
+#ifndef OS_WIN
 TEST_F(DBTest, MergeTestTime) {
   std::string one, two, three;
   PutFixed64(&one, 1);
@@ -5421,6 +5421,7 @@ TEST_F(DBTest, MergeTestTime) {
 #endif  // ROCKSDB_USING_THREAD_STATUS
   this->env_->time_elapse_only_sleep_ = false;
 }
+#endif // OS_WIN
 
 #ifndef ROCKSDB_LITE
 TEST_P(DBTestWithParam, MergeCompactionTimeTest) {

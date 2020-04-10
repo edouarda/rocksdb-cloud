@@ -389,6 +389,9 @@ class DB {
   // If the database contains an entry for "key" store the
   // corresponding value in *value and return OK.
   //
+  // If timestamp is enabled and a non-null timestamp pointer is passed in,
+  // timestamp is returned.
+  //
   // If there is no entry for "key" leave *value unchanged and return
   // a status for which Status::IsNotFound() returns true.
   //
@@ -411,6 +414,32 @@ class DB {
   virtual Status Get(const ReadOptions& options, const Slice& key,
                      std::string* value) {
     return Get(options, DefaultColumnFamily(), key, value);
+  }
+
+  // Get() methods that return timestamp. Derived DB classes don't need to worry
+  // about this group of methods if they don't care about timestamp feature.
+  virtual inline Status Get(const ReadOptions& options,
+                            ColumnFamilyHandle* column_family, const Slice& key,
+                            std::string* value, std::string* timestamp) {
+    assert(value != nullptr);
+    PinnableSlice pinnable_val(value);
+    assert(!pinnable_val.IsPinned());
+    auto s = Get(options, column_family, key, &pinnable_val, timestamp);
+    if (s.ok() && pinnable_val.IsPinned()) {
+      value->assign(pinnable_val.data(), pinnable_val.size());
+    }  // else value is already assigned
+    return s;
+  }
+  virtual Status Get(const ReadOptions& /*options*/,
+                     ColumnFamilyHandle* /*column_family*/,
+                     const Slice& /*key*/, PinnableSlice* /*value*/,
+                     std::string* /*timestamp*/) {
+    return Status::NotSupported(
+        "Get() that returns timestamp is not implemented.");
+  }
+  virtual Status Get(const ReadOptions& options, const Slice& key,
+                     std::string* value, std::string* timestamp) {
+    return Get(options, DefaultColumnFamily(), key, value, timestamp);
   }
 
   // Returns all the merge operands corresponding to the key. If the
@@ -452,6 +481,25 @@ class DB {
         keys, values);
   }
 
+  virtual std::vector<Status> MultiGet(
+      const ReadOptions& /*options*/,
+      const std::vector<ColumnFamilyHandle*>& /*column_family*/,
+      const std::vector<Slice>& keys, std::vector<std::string>* /*values*/,
+      std::vector<std::string>* /*timestamps*/) {
+    return std::vector<Status>(
+        keys.size(), Status::NotSupported(
+                         "MultiGet() returning timestamps not implemented."));
+  }
+  virtual std::vector<Status> MultiGet(const ReadOptions& options,
+                                       const std::vector<Slice>& keys,
+                                       std::vector<std::string>* values,
+                                       std::vector<std::string>* timestamps) {
+    return MultiGet(
+        options,
+        std::vector<ColumnFamilyHandle*>(keys.size(), DefaultColumnFamily()),
+        keys, values, timestamps);
+  }
+
   // Overloaded MultiGet API that improves performance by batching operations
   // in the read path for greater efficiency. Currently, only the block based
   // table format with full filters are supported. Other table formats such
@@ -487,6 +535,30 @@ class DB {
     }
     status = MultiGet(options, cf, user_keys, &vals);
     std::copy(status.begin(), status.end(), statuses);
+    for (auto& value : vals) {
+      values->PinSelf(value);
+      values++;
+    }
+  }
+
+  virtual void MultiGet(const ReadOptions& options,
+                        ColumnFamilyHandle* column_family,
+                        const size_t num_keys, const Slice* keys,
+                        PinnableSlice* values, std::string* timestamps,
+                        Status* statuses, const bool /*sorted_input*/ = false) {
+    std::vector<ColumnFamilyHandle*> cf;
+    std::vector<Slice> user_keys;
+    std::vector<Status> status;
+    std::vector<std::string> vals;
+    std::vector<std::string> tss;
+
+    for (size_t i = 0; i < num_keys; ++i) {
+      cf.emplace_back(column_family);
+      user_keys.emplace_back(keys[i]);
+    }
+    status = MultiGet(options, cf, user_keys, &vals, &tss);
+    std::copy(status.begin(), status.end(), statuses);
+    std::copy(tss.begin(), tss.end(), timestamps);
     for (auto& value : vals) {
       values->PinSelf(value);
       values++;
@@ -532,6 +604,28 @@ class DB {
       values++;
     }
   }
+  virtual void MultiGet(const ReadOptions& options, const size_t num_keys,
+                        ColumnFamilyHandle** column_families, const Slice* keys,
+                        PinnableSlice* values, std::string* timestamps,
+                        Status* statuses, const bool /*sorted_input*/ = false) {
+    std::vector<ColumnFamilyHandle*> cf;
+    std::vector<Slice> user_keys;
+    std::vector<Status> status;
+    std::vector<std::string> vals;
+    std::vector<std::string> tss;
+
+    for (size_t i = 0; i < num_keys; ++i) {
+      cf.emplace_back(column_families[i]);
+      user_keys.emplace_back(keys[i]);
+    }
+    status = MultiGet(options, cf, user_keys, &vals, &tss);
+    std::copy(status.begin(), status.end(), statuses);
+    std::copy(tss.begin(), tss.end(), timestamps);
+    for (auto& value : vals) {
+      values->PinSelf(value);
+      values++;
+    }
+  }
 
   // If the key definitely does not exist in the database, then this method
   // returns false, else true. If the caller wants to obtain value when the key
@@ -543,15 +637,31 @@ class DB {
   virtual bool KeyMayExist(const ReadOptions& /*options*/,
                            ColumnFamilyHandle* /*column_family*/,
                            const Slice& /*key*/, std::string* /*value*/,
+                           std::string* /*timestamp*/,
                            bool* value_found = nullptr) {
     if (value_found != nullptr) {
       *value_found = false;
     }
     return true;
   }
+
+  virtual bool KeyMayExist(const ReadOptions& options,
+                           ColumnFamilyHandle* column_family, const Slice& key,
+                           std::string* value, bool* value_found = nullptr) {
+    return KeyMayExist(options, column_family, key, value,
+                       /*timestamp=*/nullptr, value_found);
+  }
+
   virtual bool KeyMayExist(const ReadOptions& options, const Slice& key,
                            std::string* value, bool* value_found = nullptr) {
     return KeyMayExist(options, DefaultColumnFamily(), key, value, value_found);
+  }
+
+  virtual bool KeyMayExist(const ReadOptions& options, const Slice& key,
+                           std::string* value, std::string* timestamp,
+                           bool* value_found = nullptr) {
+    return KeyMayExist(options, DefaultColumnFamily(), key, value, timestamp,
+                       value_found);
   }
 
   // Return a heap-allocated iterator over the contents of the database.

@@ -6,11 +6,10 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-#include "db/db_impl/db_impl.h"
-
 #include <cinttypes>
 
 #include "db/builder.h"
+#include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "env/composite_env_wrapper.h"
 #include "file/read_write_util.h"
@@ -18,8 +17,8 @@
 #include "file/writable_file_writer.h"
 #include "monitoring/persistent_stats_history.h"
 #include "options/options_helper.h"
+#include "rocksdb/db_plugin.h"
 #include "rocksdb/wal_filter.h"
-#include "table/block_based/block_based_table_factory.h"
 #include "test_util/sync_point.h"
 #include "util/rate_limiter.h"
 
@@ -35,16 +34,8 @@ Options SanitizeOptions(const std::string& dbname, const Options& src) {
 DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
   DBOptions result(src);
 
-  if (result.file_system == nullptr) {
-    if (result.env == Env::Default()) {
-      result.file_system = FileSystem::Default();
-    } else {
-      result.file_system.reset(new LegacyFileSystemWrapper(result.env));
-    }
-  } else {
-    if (result.env == nullptr) {
-      result.env = Env::Default();
-    }
+  if (result.env == nullptr) {
+    result.env = Env::Default();
   }
 
   // result.max_open_files means an "infinite" open files.
@@ -183,12 +174,12 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
 }
 
 namespace {
-Status SanitizeOptionsByTable(
+Status ValidateOptionsByTable(
     const DBOptions& db_opts,
     const std::vector<ColumnFamilyDescriptor>& column_families) {
   Status s;
   for (auto cf : column_families) {
-    s = cf.options.table_factory->SanitizeOptions(db_opts, cf.options);
+    s = ValidateOptions(db_opts, cf.options);
     if (!s.ok()) {
       return s;
     }
@@ -198,9 +189,15 @@ Status SanitizeOptionsByTable(
 }  // namespace
 
 Status DBImpl::ValidateOptions(
-    const DBOptions& db_options,
+    const std::string& db_name, const DBOptions& db_options,
     const std::vector<ColumnFamilyDescriptor>& column_families) {
-  Status s;
+  Status s = ValidateOptionsByTable(db_options, column_families);
+  if (s.ok()) {
+    s = DBPlugin::ValidateOptions(db_name, db_options, column_families);
+  }
+  if (!s.ok()) {
+    return s;
+  }
   for (auto& cfd : column_families) {
     s = ColumnFamilyData::ValidateOptions(db_options, cfd.options);
     if (!s.ok()) {
@@ -252,6 +249,12 @@ Status DBImpl::ValidateOptions(const DBOptions& db_options) {
         "atomic_flush is incompatible with enable_pipelined_write");
   }
 
+  // TODO remove this restriction
+  if (db_options.atomic_flush && db_options.best_efforts_recovery) {
+    return Status::InvalidArgument(
+        "atomic_flush is currently incompatible with best-efforts recovery");
+  }
+
   return Status::OK();
 }
 
@@ -294,15 +297,16 @@ Status DBImpl::NewDB() {
   }
   if (s.ok()) {
     // Make "CURRENT" file that points to the new manifest file.
-    s = SetCurrentFile(env_, dbname_, 1, directories_.GetDbDir());
+    s = SetCurrentFile(fs_.get(), dbname_, 1, directories_.GetDbDir());
   } else {
     fs_->DeleteFile(manifest, IOOptions(), nullptr);
   }
   return s;
 }
 
-Status DBImpl::CreateAndNewDirectory(Env* env, const std::string& dirname,
-                                     std::unique_ptr<Directory>* directory) {
+IOStatus DBImpl::CreateAndNewDirectory(
+    FileSystem* fs, const std::string& dirname,
+    std::unique_ptr<FSDirectory>* directory) {
   // We call CreateDirIfMissing() as the directory may already exist (if we
   // are reopening a DB), when this happens we don't want creating the
   // directory to cause an error. However, we need to check if creating the
@@ -310,24 +314,24 @@ Status DBImpl::CreateAndNewDirectory(Env* env, const std::string& dirname,
   // file not existing. One real-world example of this occurring is if
   // env->CreateDirIfMissing() doesn't create intermediate directories, e.g.
   // when dbname_ is "dir/db" but when "dir" doesn't exist.
-  Status s = env->CreateDirIfMissing(dirname);
-  if (!s.ok()) {
-    return s;
+  IOStatus io_s = fs->CreateDirIfMissing(dirname, IOOptions(), nullptr);
+  if (!io_s.ok()) {
+    return io_s;
   }
-  return env->NewDirectory(dirname, directory);
+  return fs->NewDirectory(dirname, IOOptions(), directory, nullptr);
 }
 
-Status Directories::SetDirectories(Env* env, const std::string& dbname,
-                                   const std::string& wal_dir,
-                                   const std::vector<DbPath>& data_paths) {
-  Status s = DBImpl::CreateAndNewDirectory(env, dbname, &db_dir_);
-  if (!s.ok()) {
-    return s;
+IOStatus Directories::SetDirectories(FileSystem* fs, const std::string& dbname,
+                                     const std::string& wal_dir,
+                                     const std::vector<DbPath>& data_paths) {
+  IOStatus io_s = DBImpl::CreateAndNewDirectory(fs, dbname, &db_dir_);
+  if (!io_s.ok()) {
+    return io_s;
   }
   if (!wal_dir.empty() && dbname != wal_dir) {
-    s = DBImpl::CreateAndNewDirectory(env, wal_dir, &wal_dir_);
-    if (!s.ok()) {
-      return s;
+    io_s = DBImpl::CreateAndNewDirectory(fs, wal_dir, &wal_dir_);
+    if (!io_s.ok()) {
+      return io_s;
     }
   }
 
@@ -337,16 +341,16 @@ Status Directories::SetDirectories(Env* env, const std::string& dbname,
     if (db_path == dbname) {
       data_dirs_.emplace_back(nullptr);
     } else {
-      std::unique_ptr<Directory> path_directory;
-      s = DBImpl::CreateAndNewDirectory(env, db_path, &path_directory);
-      if (!s.ok()) {
-        return s;
+      std::unique_ptr<FSDirectory> path_directory;
+      io_s = DBImpl::CreateAndNewDirectory(fs, db_path, &path_directory);
+      if (!io_s.ok()) {
+        return io_s;
       }
       data_dirs_.emplace_back(path_directory.release());
     }
   }
   assert(data_dirs_.size() == data_paths.size());
-  return Status::OK();
+  return IOStatus::OK();
 }
 
 Status DBImpl::Recover(
@@ -358,7 +362,7 @@ Status DBImpl::Recover(
   bool is_new_db = false;
   assert(db_lock_ == nullptr);
   if (!read_only) {
-    Status s = directories_.SetDirectories(env_, dbname_,
+    Status s = directories_.SetDirectories(fs_.get(), dbname_,
                                            immutable_db_options_.wal_dir,
                                            immutable_db_options_.db_paths);
     if (!s.ok()) {
@@ -418,7 +422,17 @@ Status DBImpl::Recover(
     }
   }
   assert(db_id_.empty());
-  Status s = versions_->Recover(column_families, read_only, &db_id_);
+  Status s;
+  bool missing_table_file = false;
+  if (!immutable_db_options_.best_efforts_recovery) {
+    s = versions_->Recover(column_families, read_only, &db_id_);
+  } else {
+    s = versions_->TryRecover(column_families, read_only, &db_id_,
+                              &missing_table_file);
+    if (s.ok()) {
+      s = CleanupFilesAfterRecovery();
+    }
+  }
   if (!s.ok()) {
     return s;
   }
@@ -458,7 +472,7 @@ Status DBImpl::Recover(
     s = CheckConsistency();
   }
   if (s.ok() && !read_only) {
-    std::map<std::string, std::shared_ptr<Directory>> created_dirs;
+    std::map<std::string, std::shared_ptr<FSDirectory>> created_dirs;
     for (auto cfd : *versions_->GetColumnFamilySet()) {
       s = cfd->AddDirectories(&created_dirs);
       if (!s.ok()) {
@@ -498,7 +512,9 @@ Status DBImpl::Recover(
     // attention to it in case we are recovering a database
     // produced by an older version of rocksdb.
     std::vector<std::string> filenames;
-    s = env_->GetChildren(immutable_db_options_.wal_dir, &filenames);
+    if (!immutable_db_options_.best_efforts_recovery) {
+      s = env_->GetChildren(immutable_db_options_.wal_dir, &filenames);
+    }
     if (s.IsNotFound()) {
       return Status::InvalidArgument("wal_dir not found",
                                      immutable_db_options_.wal_dir);
@@ -1228,6 +1244,7 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
       if (range_del_iter != nullptr) {
         range_del_iters.emplace_back(range_del_iter);
       }
+      IOStatus io_s;
       s = BuildTable(
           dbname_, env_, fs_.get(), *cfd->ioptions(), mutable_cf_options,
           file_options_for_compaction_, cfd->table_cache(), iter.get(),
@@ -1236,8 +1253,8 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
           snapshot_seqs, earliest_write_conflict_snapshot, snapshot_checker,
           GetCompressionFlush(*cfd->ioptions(), mutable_cf_options),
           mutable_cf_options.sample_for_compression,
-          cfd->ioptions()->compression_opts, paranoid_file_checks,
-          cfd->internal_stats(), TableFileCreationReason::kRecovery,
+          mutable_cf_options.compression_opts, paranoid_file_checks,
+          cfd->internal_stats(), TableFileCreationReason::kRecovery, &io_s,
           &event_logger_, job_id, Env::IO_HIGH, nullptr /* table_properties */,
           -1 /* level */, current_time, write_hint);
       LogFlush(immutable_db_options_.info_log);
@@ -1352,16 +1369,20 @@ Status DBImpl::CreateWAL(uint64_t log_file_num, uint64_t recycle_log_number,
   return s;
 }
 
-Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
-                    const std::vector<ColumnFamilyDescriptor>& column_families,
-                    std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
-                    const bool seq_per_batch, const bool batch_per_txn) {
-  Status s = SanitizeOptionsByTable(db_options, column_families);
+Status DBImpl::Open(
+    const DBOptions& db_options_in, const std::string& dbname,
+    const std::vector<ColumnFamilyDescriptor>& column_families_in,
+    std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
+    const bool seq_per_batch, const bool batch_per_txn) {
+  DBOptions db_options = db_options_in;
+  std::vector<ColumnFamilyDescriptor> column_families = column_families_in;
+  bool owns_info_log = (db_options.info_log == nullptr);
+  Status s = DBPlugin::SanitizeOptions(dbname, &db_options, &column_families);
   if (!s.ok()) {
     return s;
   }
 
-  s = ValidateOptions(db_options, column_families);
+  s = ValidateOptions(dbname, db_options, column_families);
   if (!s.ok()) {
     return s;
   }
@@ -1375,7 +1396,8 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
         std::max(max_write_buffer_size, cf.options.write_buffer_size);
   }
 
-  DBImpl* impl = new DBImpl(db_options, dbname, seq_per_batch, batch_per_txn);
+  DBImpl* impl = new DBImpl(db_options, dbname, owns_info_log, seq_per_batch,
+                            batch_per_txn);
   s = impl->env_->CreateDirIfMissing(impl->immutable_db_options_.wal_dir);
   if (s.ok()) {
     std::vector<std::string> paths;
@@ -1400,13 +1422,9 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
       impl->error_handler_.EnableAutoRecovery();
     }
   }
-
-  if (!s.ok()) {
-    delete impl;
-    return s;
+  if (s.ok()) {
+    s = impl->CreateArchivalDirectory();
   }
-
-  s = impl->CreateArchivalDirectory();
   if (!s.ok()) {
     delete impl;
     return s;
@@ -1477,7 +1495,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
       }
 
       impl->DeleteObsoleteFiles();
-      s = impl->directories_.GetDbDir()->Fsync();
+      s = impl->directories_.GetDbDir()->Fsync(IOOptions(), nullptr);
     }
     if (s.ok()) {
       // In WritePrepared there could be gap in sequence numbers. This breaks
@@ -1638,12 +1656,20 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   if (s.ok()) {
     impl->StartTimedTasks();
   }
+  if (s.ok()) {
+    s = DBPlugin::Open(impl, *handles, dbptr);
+  }
+
   if (!s.ok()) {
     for (auto* h : *handles) {
       delete h;
     }
     handles->clear();
-    delete impl;
+    if (*dbptr != nullptr) {
+      delete *dbptr;
+    } else {
+      delete impl;
+    }
     *dbptr = nullptr;
   }
   return s;

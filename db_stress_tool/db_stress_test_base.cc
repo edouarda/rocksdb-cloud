@@ -12,6 +12,7 @@
 #include "db_stress_tool/db_stress_common.h"
 #include "db_stress_tool/db_stress_driver.h"
 #include "rocksdb/convenience.h"
+#include "rocksdb/sst_file_manager.h"
 
 namespace ROCKSDB_NAMESPACE {
 StressTest::StressTest()
@@ -40,6 +41,7 @@ StressTest::StressTest()
     }
 
     Options options;
+    options.env = db_stress_env;
     // Remove files without preserving manfiest files
 #ifndef ROCKSDB_LITE
     const Status s = !FLAGS_use_blob_db
@@ -591,13 +593,28 @@ void StressTest::OperateDb(ThreadState* thread) {
       }
 
 #ifndef ROCKSDB_LITE
-      // Every 1 in N verify the one of the following: 1) GetLiveFiles
-      // 2) GetSortedWalFiles 3) GetCurrentWalFile. Each time, randomly select
-      // one of them to run the test.
-      if (thread->rand.OneInOpt(FLAGS_get_live_files_and_wal_files_one_in)) {
-        Status status = VerifyGetLiveAndWalFiles(thread);
+      // Verify GetLiveFiles with a 1 in N chance.
+      if (thread->rand.OneInOpt(FLAGS_get_live_files_one_in)) {
+        Status status = VerifyGetLiveFiles();
         if (!status.ok()) {
-          VerificationAbort(shared, "VerifyGetLiveAndWalFiles status not OK",
+          VerificationAbort(shared, "VerifyGetLiveFiles status not OK", status);
+        }
+      }
+
+      // Verify GetSortedWalFiles with a 1 in N chance.
+      if (thread->rand.OneInOpt(FLAGS_get_sorted_wal_files_one_in)) {
+        Status status = VerifyGetSortedWalFiles();
+        if (!status.ok()) {
+          VerificationAbort(shared, "VerifyGetSortedWalFiles status not OK",
+                            status);
+        }
+      }
+
+      // Verify GetCurrentWalFile with a 1 in N chance.
+      if (thread->rand.OneInOpt(FLAGS_get_current_wal_file_one_in)) {
+        Status status = VerifyGetCurrentWalFile();
+        if (!status.ok()) {
+          VerificationAbort(shared, "VerifyGetCurrentWalFile status not OK",
                             status);
         }
       }
@@ -976,28 +993,23 @@ Status StressTest::TestIterate(ThreadState* thread,
 }
 
 #ifndef ROCKSDB_LITE
-// Test the return status of GetLiveFiles, GetSortedWalFiles, and
-// GetCurrentWalFile. Each time, randomly select one of them to run
-// and return the status.
-Status StressTest::VerifyGetLiveAndWalFiles(ThreadState* thread) {
-  int case_num = thread->rand.Uniform(3);
-  if (case_num == 0) {
-    std::vector<std::string> live_file;
-    uint64_t manifest_size;
-    return db_->GetLiveFiles(live_file, &manifest_size);
-  }
+// Test the return status of GetLiveFiles.
+Status StressTest::VerifyGetLiveFiles() const {
+  std::vector<std::string> live_file;
+  uint64_t manifest_size = 0;
+  return db_->GetLiveFiles(live_file, &manifest_size);
+}
 
-  if (case_num == 1) {
-    VectorLogPtr log_ptr;
-    return db_->GetSortedWalFiles(log_ptr);
-  }
+// Test the return status of GetSortedWalFiles.
+Status StressTest::VerifyGetSortedWalFiles() const {
+  VectorLogPtr log_ptr;
+  return db_->GetSortedWalFiles(log_ptr);
+}
 
-  if (case_num == 2) {
-    std::unique_ptr<LogFile> cur_wal_file;
-    return db_->GetCurrentWalFile(&cur_wal_file);
-  }
-  assert(false);
-  return Status::Corruption("Undefined case happens!");
+// Test the return status of GetCurrentWalFile.
+Status StressTest::VerifyGetCurrentWalFile() const {
+  std::unique_ptr<LogFile> cur_wal_file;
+  return db_->GetCurrentWalFile(&cur_wal_file);
 }
 #endif  // !ROCKSDB_LITE
 
@@ -1837,6 +1849,21 @@ void StressTest::Open() {
                                   : RateLimiter::Mode::kWritesOnly));
     if (FLAGS_rate_limit_bg_reads) {
       options_.new_table_reader_for_compaction_inputs = true;
+    }
+  }
+  if (FLAGS_sst_file_manager_bytes_per_sec > 0 ||
+      FLAGS_sst_file_manager_bytes_per_truncate > 0) {
+    Status status;
+    options_.sst_file_manager.reset(NewSstFileManager(
+        db_stress_env, options_.info_log, "" /* trash_dir */,
+        static_cast<int64_t>(FLAGS_sst_file_manager_bytes_per_sec),
+        true /* delete_existing_trash */, &status,
+        0.25 /* max_trash_db_ratio */,
+        FLAGS_sst_file_manager_bytes_per_truncate));
+    if (!status.ok()) {
+      fprintf(stderr, "SstFileManager creation failed: %s\n",
+              status.ToString().c_str());
+      exit(1);
     }
   }
 

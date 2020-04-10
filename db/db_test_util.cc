@@ -57,12 +57,14 @@ DBTestBase::DBTestBase(const std::string path)
       encrypted_env_(nullptr),
       option_config_(kDefault),
       s3_env_(nullptr) {
+  auto options = CurrentOptions();
   Env* base_env = Env::Default();
 #ifndef ROCKSDB_LITE
   const char* test_env_uri = getenv("TEST_ENV_URI");
   if (test_env_uri) {
     Env* test_env = nullptr;
-    Status s = Env::LoadEnv(test_env_uri, &test_env, &env_guard_);
+    ConfigOptions cfg(options);
+    Status s = Env::CreateFromString(test_env_uri, cfg, &test_env, &env_guard_);
     base_env = test_env;
     EXPECT_OK(s);
     EXPECT_NE(Env::Default(), base_env);
@@ -94,7 +96,6 @@ DBTestBase::DBTestBase(const std::string path)
   dbname_ = test::PerThreadDBPath(env_, path);
   alternative_wal_dir_ = dbname_ + "/wal";
   alternative_db_log_dir_ = dbname_ + "/db_log_dir";
-  auto options = CurrentOptions();
   options.env = env_;
   auto delete_options = options;
   delete_options.wal_dir = alternative_wal_dir_;

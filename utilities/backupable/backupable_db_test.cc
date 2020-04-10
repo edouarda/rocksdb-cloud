@@ -137,6 +137,7 @@ class DummyDB : public StackableDB {
 class TestEnv : public EnvWrapper {
  public:
   explicit TestEnv(Env* t) : EnvWrapper(t) {}
+  const char* Name() const override { return "TestEnv"; }
 
   class DummySequentialFile : public SequentialFile {
    public:
@@ -375,6 +376,7 @@ class TestEnv : public EnvWrapper {
 class FileManager : public EnvWrapper {
  public:
   explicit FileManager(Env* t) : EnvWrapper(t), rnd_(5) {}
+  const char* Name() const override { return "FileManager"; }
 
   Status DeleteRandomFileInDir(const std::string& dir) {
     std::vector<std::string> children;
@@ -1840,6 +1842,87 @@ TEST_P(BackupableDBTestWithParam, BackupUsingDirectIO) {
                             (i + 1) * kNumKeysPerBackup /* end_exist */,
                             (i + 2) * kNumKeysPerBackup /* end */);
   }
+}
+
+TEST_F(BackupableDBTest, BackgroundThreadCpuPriority) {
+  std::atomic<CpuPriority> priority(CpuPriority::kNormal);
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "BackupEngineImpl::Initialize:SetCpuPriority", [&](void* new_priority) {
+        priority.store(*reinterpret_cast<CpuPriority*>(new_priority));
+      });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  // 1 thread is easier to test, otherwise, we may not be sure which thread
+  // actually does the work during CreateNewBackup.
+  backupable_options_->max_background_operations = 1;
+  OpenDBAndBackupEngine(true);
+
+  {
+    FillDB(db_.get(), 0, 100);
+
+    // by default, cpu priority is not changed.
+    CreateBackupOptions options;
+    ASSERT_OK(backup_engine_->CreateNewBackup(options, db_.get()));
+
+    ASSERT_EQ(priority, CpuPriority::kNormal);
+  }
+
+  {
+    FillDB(db_.get(), 101, 200);
+
+    // decrease cpu priority from normal to low.
+    CreateBackupOptions options;
+    options.decrease_background_thread_cpu_priority = true;
+    options.background_thread_cpu_priority = CpuPriority::kLow;
+    ASSERT_OK(backup_engine_->CreateNewBackup(options, db_.get()));
+
+    ASSERT_EQ(priority, CpuPriority::kLow);
+  }
+
+  {
+    FillDB(db_.get(), 201, 300);
+
+    // try to upgrade cpu priority back to normal,
+    // the priority should still low.
+    CreateBackupOptions options;
+    options.decrease_background_thread_cpu_priority = true;
+    options.background_thread_cpu_priority = CpuPriority::kNormal;
+    ASSERT_OK(backup_engine_->CreateNewBackup(options, db_.get()));
+
+    ASSERT_EQ(priority, CpuPriority::kLow);
+  }
+
+  {
+    FillDB(db_.get(), 301, 400);
+
+    // decrease cpu priority from low to idle.
+    CreateBackupOptions options;
+    options.decrease_background_thread_cpu_priority = true;
+    options.background_thread_cpu_priority = CpuPriority::kIdle;
+    ASSERT_OK(backup_engine_->CreateNewBackup(options, db_.get()));
+
+    ASSERT_EQ(priority, CpuPriority::kIdle);
+  }
+
+  {
+    FillDB(db_.get(), 301, 400);
+
+    // reset priority to later verify that it's not updated by SetCpuPriority.
+    priority = CpuPriority::kNormal;
+
+    // setting the same cpu priority won't call SetCpuPriority.
+    CreateBackupOptions options;
+    options.decrease_background_thread_cpu_priority = true;
+    options.background_thread_cpu_priority = CpuPriority::kIdle;
+    ASSERT_OK(backup_engine_->CreateNewBackup(options, db_.get()));
+
+    ASSERT_EQ(priority, CpuPriority::kNormal);
+  }
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+  CloseDBAndBackupEngine();
+  DestroyDB(dbname_, options_);
 }
 
 }  // anon namespace

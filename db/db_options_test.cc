@@ -33,32 +33,26 @@ class DBOptionsTest : public DBTestBase {
   std::unordered_map<std::string, std::string> GetMutableDBOptionsMap(
       const DBOptions& options) {
     std::string options_str;
-    GetStringFromDBOptions(&options_str, options);
-    std::unordered_map<std::string, std::string> options_map;
-    StringToMap(options_str, &options_map);
     std::unordered_map<std::string, std::string> mutable_map;
-    for (const auto opt : db_options_type_info) {
-      if (opt.second.is_mutable &&
-          opt.second.verification != OptionVerificationType::kDeprecated) {
-        mutable_map[opt.first] = options_map[opt.first];
-      }
-    }
+    ConfigOptions cfg_opts(options);
+    cfg_opts.delimiter = "; ";
+
+    GetStringFromMutableDBOptions(MutableDBOptions(options), cfg_opts,
+                                  &options_str);
+    StringToMap(options_str, &mutable_map);
     return mutable_map;
   }
 
   std::unordered_map<std::string, std::string> GetMutableCFOptionsMap(
       const ColumnFamilyOptions& options) {
     std::string options_str;
-    GetStringFromColumnFamilyOptions(&options_str, options);
-    std::unordered_map<std::string, std::string> options_map;
-    StringToMap(options_str, &options_map);
+    ConfigOptions cfg_opts;
+    cfg_opts.delimiter = "; ";
+
     std::unordered_map<std::string, std::string> mutable_map;
-    for (const auto opt : cf_options_type_info) {
-      if (opt.second.is_mutable &&
-          opt.second.verification != OptionVerificationType::kDeprecated) {
-        mutable_map[opt.first] = options_map[opt.first];
-      }
-    }
+    GetStringFromMutableCFOptions(MutableCFOptions(options), cfg_opts,
+                                  &options_str);
+    StringToMap(options_str, &mutable_map);
     return mutable_map;
   }
 
@@ -857,6 +851,66 @@ TEST_F(DBOptionsTest, FIFOTtlBackwardCompatible) {
   ASSERT_EQ(dbfull()->GetOptions().compaction_options_fifo.max_table_files_size,
             1024);
   ASSERT_EQ(dbfull()->GetOptions().ttl, 191);
+}
+
+TEST_F(DBOptionsTest, ChangeCompression) {
+  if (!Snappy_Supported() || !LZ4_Supported()) {
+    return;
+  }
+  Options options;
+  options.write_buffer_size = 10 << 10;  // 10KB
+  options.level0_file_num_compaction_trigger = 2;
+  options.create_if_missing = true;
+  options.compression = CompressionType::kLZ4Compression;
+  options.bottommost_compression = CompressionType::kNoCompression;
+  options.bottommost_compression_opts.level = 2;
+  options.bottommost_compression_opts.parallel_threads = 1;
+
+  ASSERT_OK(TryReopen(options));
+
+  CompressionType compression_used = CompressionType::kLZ4Compression;
+  CompressionOptions compression_opt_used;
+  bool compacted = false;
+  SyncPoint::GetInstance()->SetCallBack(
+      "LevelCompactionPicker::PickCompaction:Return", [&](void* arg) {
+        Compaction* c = reinterpret_cast<Compaction*>(arg);
+        compression_used = c->output_compression();
+        compression_opt_used = c->output_compression_opts();
+        compacted = true;
+      });
+  SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(Put("foo", "foofoofoo"));
+  ASSERT_OK(Put("bar", "foofoofoo"));
+  ASSERT_OK(Flush());
+  ASSERT_OK(Put("foo", "foofoofoo"));
+  ASSERT_OK(Put("bar", "foofoofoo"));
+  ASSERT_OK(Flush());
+  dbfull()->TEST_WaitForCompact();
+  ASSERT_TRUE(compacted);
+  ASSERT_EQ(CompressionType::kNoCompression, compression_used);
+  ASSERT_EQ(options.compression_opts.level, compression_opt_used.level);
+  ASSERT_EQ(options.compression_opts.parallel_threads,
+            compression_opt_used.parallel_threads);
+
+  compression_used = CompressionType::kLZ4Compression;
+  compacted = false;
+  ASSERT_OK(dbfull()->SetOptions(
+      {{"bottommost_compression", "kSnappyCompression"},
+       {"bottommost_compression_opts", "0:6:0:0:0:4:true"}}));
+  ASSERT_OK(Put("foo", "foofoofoo"));
+  ASSERT_OK(Put("bar", "foofoofoo"));
+  ASSERT_OK(Flush());
+  ASSERT_OK(Put("foo", "foofoofoo"));
+  ASSERT_OK(Put("bar", "foofoofoo"));
+  ASSERT_OK(Flush());
+  dbfull()->TEST_WaitForCompact();
+  ASSERT_TRUE(compacted);
+  ASSERT_EQ(CompressionType::kSnappyCompression, compression_used);
+  ASSERT_EQ(6, compression_opt_used.level);
+  ASSERT_EQ(4u, compression_opt_used.parallel_threads);
+
+  SyncPoint::GetInstance()->DisableProcessing();
 }
 
 #endif  // ROCKSDB_LITE
