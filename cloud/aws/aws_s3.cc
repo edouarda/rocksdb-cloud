@@ -33,8 +33,7 @@
 #include <aws/s3/model/PutObjectResult.h>
 #include <aws/s3/model/ServerSideEncryption.h>
 #include <aws/transfer/TransferManager.h>
-#endif  // USE_AWS
-
+#endif // USE_AWS
 #include <cassert>
 #include <cinttypes>
 #include <fstream>
@@ -51,6 +50,7 @@
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
 
+#ifdef USE_AWS
 namespace rocksdb {
 #ifdef USE_AWS
 class CloudRequestCallbackGuard {

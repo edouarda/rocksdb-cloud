@@ -1985,7 +1985,8 @@ void TableTest::IndexTest(BlockBasedTableOptions table_options) {
     auto key = prefixes[i] + "9";
     index_iter->Seek(InternalKey(key, 0, kTypeValue).Encode());
 
-    ASSERT_OK(index_iter->status());
+    ASSERT_TRUE(index_iter->status().ok() || index_iter->status().IsNotFound());
+    ASSERT_TRUE(!index_iter->status().IsNotFound() || !index_iter->Valid());
     if (i == prefixes.size() - 1) {
       // last key
       ASSERT_TRUE(!index_iter->Valid());

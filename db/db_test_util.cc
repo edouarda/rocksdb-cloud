@@ -53,7 +53,8 @@ ROT13BlockCipher rot13Cipher_(16);
 #endif  // ROCKSDB_LITE
 
 DBTestBase::DBTestBase(const std::string path)
-    : mem_env_(nullptr),
+    : option_env_(kDefaultEnv),
+      mem_env_(nullptr),
       encrypted_env_(nullptr),
       option_config_(kDefault),
       s3_env_(nullptr) {
@@ -86,7 +87,6 @@ DBTestBase::DBTestBase(const std::string path)
   // Randomize the test path so that multiple tests can run in parallel
   srand(static_cast<unsigned int>(time(nullptr)));
   std::string mypath = path + "_" + std::to_string(rand());
-  option_env_ = kDefaultEnv;
   env_->NewLogger(test::TmpDir(env_) + "/rocksdb-cloud.log", &info_log_);
   info_log_->SetInfoLogLevel(InfoLogLevel::DEBUG_LEVEL);
   s3_env_ = CreateNewAwsEnv(mypath);
@@ -629,7 +629,6 @@ Options DBTestBase::GetOptions(
     default:
       break;
   }
-
   if (options_override.filter_policy) {
     table_options.filter_policy = options_override.filter_policy;
     table_options.partition_filters = options_override.partition_filters;
