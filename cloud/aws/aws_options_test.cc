@@ -59,19 +59,19 @@ TEST_F(AwsOptionsTest, TestLoadAws) {
          "id=AWS; storage_provider=S3;", cfg_opts,
          &db_opts.env));
   ASSERT_NE(db_opts.env, nullptr);
-  auto *options = db_opts.env->GetOptions<CloudEnvOptions>(CloudEnv::kCloudEnvOpts);
+  auto *options = db_opts.env->GetOptions<CloudEnvOptions>(CloudOptionNames::kNameCloud);
   ASSERT_NE(options, nullptr);
   ASSERT_NE(options->storage_provider, nullptr);
   ASSERT_EQ(options->storage_provider->GetId(), "S3");
   ASSERT_OK(db_opts.env->PrepareOptions(cfg_opts));
 
-  CloudEnv *cloud = db_opts.env->CastAs<CloudEnv>(CloudEnv::kAwsEnvName);
+  CloudEnv *cloud = db_opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameAws);
   ASSERT_NE(cloud, nullptr);
   ASSERT_EQ(cloud, db_opts.env);
   cloud = db_opts.env->CastAs<CloudEnv>("CloudEnvImpl");
   ASSERT_NE(cloud, nullptr);
   ASSERT_EQ(cloud, db_opts.env);
-  cloud = db_opts.env->CastAs<CloudEnv>(CloudEnv::kCloudEnvName);
+  cloud = db_opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameCloud);
   ASSERT_NE(cloud, nullptr);
   ASSERT_EQ(cloud, db_opts.env);
   delete db_opts.env; db_opts.env = nullptr;
@@ -90,7 +90,7 @@ TEST_F(AwsOptionsTest, TestAwsEnvOptions) {
   cfg_opts.invoke_prepare_options = false;
   ASSERT_OK(aws->ConfigureFromString(
          "aws.server_side_encryption=true; aws.encryption_key_id=my-key; aws.use_transfer_manager=false", cfg_opts));
-  const auto *options = aws->GetOptions<CloudEnvOptions>(CloudEnv::kCloudEnvOpts);
+  const auto *options = aws->GetOptions<CloudEnvOptions>(CloudOptionNames::kNameCloud);
   ASSERT_NE(options, nullptr);
   ASSERT_TRUE(options->server_side_encryption);
   ASSERT_EQ(options->encryption_key_id, "my-key");

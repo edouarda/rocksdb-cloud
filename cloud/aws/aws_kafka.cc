@@ -187,7 +187,7 @@ class KafkaController : public CloudLogControllerImpl {
   }
   
   const char *Name() const override {
-    return CloudLogController::kKafkaControllerName;
+    return CloudOptionNames::kNameKafka;
   }
 
   virtual Status CreateStream(const std::string& /* bucket_prefix */) override {

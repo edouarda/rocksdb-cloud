@@ -132,14 +132,14 @@ CloudEnv::CloudEnv(const CloudEnvOptions& options, Env *base, const std::shared_
     base_env_(base),
     info_log_(logger) {
   RegisterOptions("BaseEnvOptions", &base_env_, &env_target_type_info); //**See TODO above
-  RegisterOptions(kCloudEnvOpts, &cloud_env_options, &basic_cloud_type_info);
+  RegisterOptions(CloudOptionNames::kNameCloud, &cloud_env_options, &basic_cloud_type_info);
   
 }
   
 CloudEnv::~CloudEnv() {}
   
 const Customizable* CloudEnv::FindInstance(const std::string& name) const {
-  if (name == kCloudEnvName) {
+  if (name == CloudOptionNames::kNameCloud) {
     return this;
   } else {
     return Env::FindInstance(name);

@@ -1062,7 +1062,7 @@ Status CloudEnvImpl::PrepareOptions(const ConfigOptions& opts) {
   }
 }
 Status CloudEnvImpl::ValidateOptions(const DBOptions& db_opts, const ColumnFamilyOptions& cf_opts) const {
-  auto *cloud = db_opts.env->CastAs<CloudEnv>(CloudEnv::kCloudEnvName);
+  auto *cloud = db_opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameCloud);
   if (cloud == nullptr || cloud != this) {
     return Status::InvalidArgument("Invalid cloud environment");
   } else if (cloud_env_options.src_bucket.GetBucketName().empty() !=

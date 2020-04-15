@@ -50,8 +50,6 @@ class CloudLogWritableFile : public WritableFile {
 
 class CloudLogController : public Customizable{
  public:
-  constexpr static const char* kKafkaControllerName = "Kafka";
-  constexpr static const char* kKinesisControllerName = "Kinesis";
   virtual ~CloudLogController();
    static const char *Type() { return "CloudLogController"; }
   static Status CreateFromString(const std::string&value,

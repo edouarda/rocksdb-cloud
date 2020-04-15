@@ -167,7 +167,7 @@ void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
   printf("MJR: Registering AWS Objects[%s]\n", arg.c_str());
   if (arg == "shared") {
     library.Register<rocksdb::Env>(
-        CloudEnv::kAwsEnvName,
+        CloudOptionNames::kNameAws,
         [](const std::string& /*uri*/, std::unique_ptr<rocksdb::Env>* guard,
            std::string* /*errmsg*/) {
           AwsEnv *env = new rocksdb::AwsEnv(rocksdb::Env::Default(), rocksdb::CloudEnvOptions(), nullptr);
@@ -178,7 +178,7 @@ void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
         });
   } else {
     library.Register<rocksdb::Env>(
-        CloudEnv::kAwsEnvName,
+        CloudOptionNames::kNameAws,
         [](const std::string& /*uri*/, std::unique_ptr<rocksdb::Env>* /*guard*/,
            std::string* /*errmsg*/) {
           AwsEnv *env = new rocksdb::AwsEnv(rocksdb::Env::Default(), rocksdb::CloudEnvOptions(), nullptr);
@@ -189,7 +189,7 @@ void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
   }
 #endif // USE_AWS
   library.Register<rocksdb::CloudStorageProvider>(
-      CloudStorageProvider::kS3ProviderName,
+      CloudOptionNames::kNameS3,
       [](const std::string& /*uri*/, std::unique_ptr<rocksdb::CloudStorageProvider>* guard,
          std::string* errmsg) {
         rocksdb::Status s = rocksdb::CloudStorageProviderImpl::CreateS3Provider(guard);
@@ -199,7 +199,7 @@ void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
         return guard->get();
       });
   library.Register<rocksdb::CloudLogController>(
-      CloudLogController::kKinesisControllerName,
+      CloudOptionNames::kNameKinesis,
       [](const std::string& /*uri*/, std::unique_ptr<rocksdb::CloudLogController>* guard,
          std::string* errmsg) {
         rocksdb::Status s = rocksdb::CloudLogControllerImpl::CreateKinesisController(guard);
@@ -209,7 +209,7 @@ void RegisterAwsObjects(rocksdb::ObjectLibrary& library,
         return guard->get();
       });
   library.Register<rocksdb::CloudLogController>(
-      CloudLogController::kKafkaControllerName,
+      CloudOptionNames::kNameKafka,
       [](const std::string& /*uri*/, std::unique_ptr<rocksdb::CloudLogController>* guard,
          std::string* errmsg) {
         rocksdb::Status s = rocksdb::CloudLogControllerImpl::CreateKafkaController(guard);
@@ -402,7 +402,7 @@ AwsEnv::~AwsEnv() {
 }
 
 const char* AwsEnv::Name() const {
-  return CloudEnv::kAwsEnvName;
+  return CloudOptionNames::kNameAws;
 }
   
 void AwsEnv::Shutdown() { Aws::ShutdownAPI(Aws::SDKOptions()); }

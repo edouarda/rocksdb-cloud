@@ -19,8 +19,10 @@ namespace rocksdb {
 //
 class DBCloudImpl : public DBCloud {
   friend DBCloud;
+  friend class DBCloudPlugin;
 
  public:
+  explicit DBCloudImpl(DB* db);
   virtual ~DBCloudImpl();
   Status Savepoint() override;
 
@@ -42,8 +44,6 @@ class DBCloudImpl : public DBCloud {
 
   // Maximum manifest file size
   static const uint64_t max_manifest_file_size = 4 * 1024L * 1024L;
-
-  explicit DBCloudImpl(DB* db);
 };
 }
 #endif  // ROCKSDB_LITE

@@ -348,6 +348,14 @@ struct CheckpointToCloudOptions {
 // A map of dbid to the pathname where the db is stored
 typedef std::map<std::string, std::string> DbidList;
 
+struct CloudOptionNames {
+  constexpr static const char* kNameCloud = "Cloud";
+  constexpr static const char* kNameAws = "AWS";
+  constexpr static const char* kNameS3 = "S3";
+  constexpr static const char* kNameKafka = "Kafka";
+  constexpr static const char* kNameKinesis = "Kinesis";
+};
+
 //
 // The Cloud environment
 //
@@ -358,9 +366,6 @@ class CloudEnv : public Env {
 
   CloudEnv(const CloudEnvOptions& options, Env *base, const std::shared_ptr<Logger>& logger);
 public:
-  constexpr static const char* kCloudEnvName = "CloudEnv";
-  constexpr static const char* kAwsEnvName = "AWS";
-  constexpr static const char* kCloudEnvOpts ="CloudEnvOptions";
   std::shared_ptr<Logger> info_log_;  // informational messages
   virtual ~CloudEnv();
   // Returns the underlying env

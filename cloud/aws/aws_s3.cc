@@ -339,7 +339,7 @@ class S3WritableFile : public CloudStorageWritableFileImpl {
       : CloudStorageWritableFileImpl(env, local_fname, bucket, cloud_fname,
                                      options) {}
   virtual const char* Name() const override {
-    return CloudStorageProvider::kS3ProviderName;
+    return CloudOptionNames::kNameS3;
   }
 };
 
@@ -348,7 +348,7 @@ class S3StorageProvider : public CloudStorageProviderImpl {
  public:
   ~S3StorageProvider() override {}
   const char* Name() const override {
-    return CloudStorageProvider::kS3ProviderName;
+    return CloudOptionNames::kNameS3;
   }
   Status CreateBucket(const std::string& bucket) override;
   Status ExistsBucket(const std::string& bucket) override;
@@ -416,7 +416,7 @@ class S3StorageProvider : public CloudStorageProviderImpl {
 
 Status S3StorageProvider::PrepareOptions(const ConfigOptions& opts) {
 
-  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kAwsEnvName);
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameAws);
   if (cloud_env == nullptr) {
     status_ = Status::InvalidArgument("StorageProvider requires AWS env ", opts.env->GetId());
   } else {

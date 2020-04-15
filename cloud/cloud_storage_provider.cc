@@ -303,7 +303,7 @@ Status CloudStorageProviderImpl::PrepareOptions(CloudEnv *cloud_env, const Confi
 }
 
 Status CloudStorageProviderImpl::PrepareOptions(const ConfigOptions& opts) {
-  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kCloudEnvName);
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameCloud);
   if (cloud_env != nullptr) {
     env_ = cloud_env;
     status_ = CloudStorageProvider::PrepareOptions(opts);

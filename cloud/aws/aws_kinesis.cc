@@ -185,7 +185,7 @@ class KinesisController : public CloudLogControllerImpl {
   }
 
   const char *Name() const override {
-    return CloudLogController::kKinesisControllerName;
+    return CloudOptionNames::kNameKinesis;
   }
 
   Status CreateStream(const std::string& bucket) override;
@@ -215,7 +215,7 @@ class KinesisController : public CloudLogControllerImpl {
 };
 
 Status KinesisController::PrepareOptions(const ConfigOptions& opts) {
-  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kAwsEnvName);
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudOptionNames::kNameAws);
   if (cloud_env == nullptr) {
     status_ = Status::InvalidArgument("Kinesis requires AWS env ", opts.env->GetId());
   } else {
