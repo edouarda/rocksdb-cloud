@@ -13,11 +13,10 @@
 // Plugins can also be executed at other times.  Plugins can also be run during
 // by the Repair and Destroy methods of a database.
 //
-// The DBOptions class supports multiple plugins.  During "constructive" operations,
-// the plugins are executed in the order in which they are registered [0...n]
-// During "destructive" operations, plugins are executed in the inverse [n...0]
-// order.
-
+// The DBOptions class supports multiple plugins.  During "constructive"
+// operations, the plugins are executed in the order in which they are
+// registered [0...n] During "destructive" operations, plugins are executed in
+// the inverse [n...0] order.
 
 #pragma once
 
@@ -38,6 +37,8 @@ struct Options;
 // A base class for table factories.
 class DBPlugin : public Customizable {
  public:
+  // Specify how the database is being opened
+  enum OpenMode { Normal, ReadOnly, Secondary };
   virtual ~DBPlugin() {}
 
   // Creates a new plugin from the input configuration
@@ -72,99 +73,85 @@ class DBPlugin : public Customizable {
   // before the database is created.  This operation may change the input
   // options.
   virtual Status SanitizeCB(
-      const std::string& /*db_name*/, DBOptions* /*db_options*/,
+      OpenMode mode, const std::string& /*db_name*/, DBOptions* /*db_options*/,
       std::vector<ColumnFamilyDescriptor>* /*column_families*/) {
-    return Status::OK();
+    if (SupportsOpenMode(mode)) {
+      return Status::OK();
+    } else {
+      return NotSupported(mode);
+    }
   }
 
   // Traverses the list of plugins and sanitizes the options in order.
   // On error, stops the traversal and returns the status.
   static Status SanitizeOptions(
-      const std::string& db_name, DBOptions* db_options,
+      OpenMode mode, const std::string& db_name, DBOptions* db_options,
       std::vector<ColumnFamilyDescriptor>* column_families);
 
   // Allows a DB Plugin to validate the database and column family properties
   // before the database is created.  This operation checks if the input
   // options are valid for this plugin but does not change them.
   virtual Status ValidateCB(
-      const std::string& /*db_name*/, const DBOptions& /*db_options*/,
+      OpenMode mode, const std::string& /*db_name*/,
+      const DBOptions& /*db_options*/,
       const std::vector<ColumnFamilyDescriptor>& /*column_families*/) const {
-    return Status::OK();
+    if (SupportsOpenMode(mode)) {
+      return Status::OK();
+    } else {
+      return NotSupported(mode);
+    }
   }
 
   // Traverses the list of plugins and validates the options in order.
   // On error, stops the traversal and returns the status.
   static Status ValidateOptions(
-      const std::string& db_name, const DBOptions& db_options,
+      OpenMode mode, const std::string& db_name, const DBOptions& db_options,
       const std::vector<ColumnFamilyDescriptor>& column_families);
 
   // Opens the "StackableDB" for this plugin as appropriate.
   // If the operation fails, an error is returned.
   // On success, "wrapped" is updated to point to the StackableDB"
-  virtual Status OpenCB(DB* db, const std::vector<ColumnFamilyHandle*>& handles,
+  virtual Status OpenCB(OpenMode mode, DB* db,
+                        const std::vector<ColumnFamilyHandle*>& handles,
                         DB** wrapped);
 
   // Traverses the plugin list for this database and opens the
   // StackableDBs for the list of plugins.
   // If the operation fails, an error is returned.
   // On success, "wrapped" is updated to point to the StackableDB"
-  static Status Open(DB* db, const std::vector<ColumnFamilyHandle*>& handles,
+  static Status Open(OpenMode mode, DB* db,
+                     const std::vector<ColumnFamilyHandle*>& handles,
                      DB** wrapped);
 
-  // Returns true if this plugin supports ReadOnly databases
-  virtual bool SupportsReadOnly() const { return false; }
+  // Returns true if this plugin supports the open mode
+  virtual bool SupportsOpenMode(OpenMode mode) const {
+    return mode == OpenMode::Normal;
+  }
 
-  // Opens the "StackableDB" for this plugin as appropriate in "readonly" mode.
-  // If the operation fails, an error is returned.
-  // On success, "wrapped" is updated to point to the StackableDB"
-  virtual Status OpenReadOnlyCB(
-      DB* db, const std::vector<ColumnFamilyHandle*>& /*handles*/,
-      DB** wrapped);
-
-  // Traverses the plugin list for this database and opens the
-  // StackableDBs readonly for the list of plugins.
-  // If the operation fails, an error is returned.
-  // On success, "wrapped" is updated to point to the StackableDB"
-  static Status OpenReadOnly(DB* db,
-                             const std::vector<ColumnFamilyHandle*>& handles,
-                             DB** wrapped);
-
-  // Returns true if this plugin supports Secondary databases
-  virtual bool SupportsSecondary() const { return false; }
-
-  // Opens the "StackableDB" for this plugin as appropriate in "secondary" mode.
-  // If the operation fails, an error is returned.
-  // On success, "wrapped" is updated to point to the StackableDB"
-  virtual Status OpenSecondaryCB(
-      DB* db, const std::vector<ColumnFamilyHandle*>& /*handles*/,
-      DB** wrapped);
-
-  // Traverses the plugin list for this database and opens the
-  // secondary database for the list of plugins.
-  // If the operation fails, an error is returned.
-  // On success, "wrapped" is updated to point to the StackableDB"
-  static Status OpenSecondary(DB* db,
-                              const std::vector<ColumnFamilyHandle*>& handles,
-                              DB** wrapped);
-
-  virtual Status RepairCB(const std::string& /*dbname*/, const DBOptions& /*db_options*/,
-                          const std::vector<ColumnFamilyDescriptor>& /*column_families*/,
-                          const ColumnFamilyOptions& /*unknown_cf_opts*/) {
+  virtual Status RepairCB(
+      const std::string& /*dbname*/, const DBOptions& /*db_options*/,
+      const std::vector<ColumnFamilyDescriptor>& /*column_families*/,
+      const ColumnFamilyOptions& /*unknown_cf_opts*/) {
     return Status::OK();
   }
 
-  static Status RepairDB(const std::string& dbname, const DBOptions& db_options,
-                         const std::vector<ColumnFamilyDescriptor>& column_families,
-                         const ColumnFamilyOptions& unknown_cf_opts);
+  static Status RepairDB(
+      const std::string& dbname, const DBOptions& db_options,
+      const std::vector<ColumnFamilyDescriptor>& column_families,
+      const ColumnFamilyOptions& unknown_cf_opts);
 
-  virtual Status DestroyCB(const std::string& /*name*/, const Options& /*options*/,
-                           const std::vector<ColumnFamilyDescriptor>& /*column_families*/) {
+  virtual Status DestroyCB(
+      const std::string& /*name*/, const Options& /*options*/,
+      const std::vector<ColumnFamilyDescriptor>& /*column_families*/) {
     return Status::OK();
   }
-  
-  static Status DestroyDB(const std::string& name, const Options& options,
-                          const std::vector<ColumnFamilyDescriptor>& column_families);
-  
+
+  static Status DestroyDB(
+      const std::string& name, const Options& options,
+      const std::vector<ColumnFamilyDescriptor>& column_families);
+
+ private:
+  Status NotSupported(OpenMode mode) const;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

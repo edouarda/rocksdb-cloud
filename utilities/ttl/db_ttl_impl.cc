@@ -57,12 +57,12 @@ Status TtlDBPlugin::PrepareTtlOptions(int ttl, Env* env,
 }
 
 Status TtlDBPlugin::SanitizeCB(
-    const std::string& db_name, DBOptions* db_options,
+    OpenMode mode, const std::string& db_name, DBOptions* db_options,
     std::vector<ColumnFamilyDescriptor>* column_families) {
   if (db_options->env == nullptr) {
     db_options->env = Env::Default();
   }
-  Status s = ValidateCB(db_name, *db_options, *column_families);
+  Status s = ValidateCB(mode, db_name, *db_options, *column_families);
   if (s.ok()) {
     return s;
   } else if (ttls_.size() != column_families->size()) {
@@ -80,7 +80,7 @@ Status TtlDBPlugin::SanitizeCB(
 }
 
 Status TtlDBPlugin::ValidateCB(
-    const std::string& db_name, const DBOptions& db_options,
+    OpenMode /*mode*/, const std::string& db_name, const DBOptions& db_options,
     const std::vector<ColumnFamilyDescriptor>& column_families) const {
   if (db_options.env == nullptr) {
     return Status::InvalidArgument("Env is required for DbTtl", db_name);
@@ -109,15 +109,9 @@ Status TtlDBPlugin::ValidateCB(
   return Status::OK();
 }
 
-Status TtlDBPlugin::OpenCB(DB* db,
+Status TtlDBPlugin::OpenCB(OpenMode /*mode*/, DB* db,
                            const std::vector<ColumnFamilyHandle*>& /*handles*/,
                            DB** wrapped) {
-  *wrapped = new DBWithTTLImpl(db);
-  return Status::OK();
-}
-
-Status TtlDBPlugin::OpenReadOnlyCB(
-    DB* db, const std::vector<ColumnFamilyHandle*>& /*handles*/, DB** wrapped) {
   *wrapped = new DBWithTTLImpl(db);
   return Status::OK();
 }

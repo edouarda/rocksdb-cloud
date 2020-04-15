@@ -166,11 +166,12 @@ Status DB::OpenForReadOnly(
   DBOptions db_options = db_options_in;
   std::vector<ColumnFamilyDescriptor> column_families = column_families_in;
   bool owns_info_log = (db_options.info_log == nullptr);
-  Status s = DBPlugin::SanitizeOptions(dbname, &db_options, &column_families);
-  if (!s.ok()) {
-    return s;
+  Status s = DBPlugin::SanitizeOptions(DBPlugin::ReadOnly, dbname, &db_options,
+                                       &column_families);
+  if (s.ok()) {
+    s = DBPlugin::ValidateOptions(DBPlugin::ReadOnly, dbname, db_options,
+                                  column_families);
   }
-  s = DBImpl::ValidateOptions(dbname, db_options, column_families);
   if (!s.ok()) {
     return s;
   }
@@ -208,7 +209,7 @@ Status DB::OpenForReadOnly(
     }
   }
   if (s.ok()) {
-    s = DBPlugin::OpenReadOnly(impl, *handles, dbptr);
+    s = DBPlugin::Open(DBPlugin::ReadOnly, impl, *handles, dbptr);
   }
   if (!s.ok()) {
     for (auto h : *handles) {

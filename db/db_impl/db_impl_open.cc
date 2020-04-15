@@ -173,41 +173,6 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
   return result;
 }
 
-namespace {
-Status ValidateOptionsByTable(
-    const DBOptions& db_opts,
-    const std::vector<ColumnFamilyDescriptor>& column_families) {
-  Status s;
-  for (auto cf : column_families) {
-    s = ValidateOptions(db_opts, cf.options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  return Status::OK();
-}
-}  // namespace
-
-Status DBImpl::ValidateOptions(
-    const std::string& db_name, const DBOptions& db_options,
-    const std::vector<ColumnFamilyDescriptor>& column_families) {
-  Status s = ValidateOptionsByTable(db_options, column_families);
-  if (s.ok()) {
-    s = DBPlugin::ValidateOptions(db_name, db_options, column_families);
-  }
-  if (!s.ok()) {
-    return s;
-  }
-  for (auto& cfd : column_families) {
-    s = ColumnFamilyData::ValidateOptions(db_options, cfd.options);
-    if (!s.ok()) {
-      return s;
-    }
-  }
-  s = ValidateOptions(db_options);
-  return s;
-}
-
 Status DBImpl::ValidateOptions(const DBOptions& db_options) {
   if (db_options.db_paths.size() > 4) {
     return Status::NotSupported(
@@ -1377,12 +1342,12 @@ Status DBImpl::Open(
   DBOptions db_options = db_options_in;
   std::vector<ColumnFamilyDescriptor> column_families = column_families_in;
   bool owns_info_log = (db_options.info_log == nullptr);
-  Status s = DBPlugin::SanitizeOptions(dbname, &db_options, &column_families);
-  if (!s.ok()) {
-    return s;
+  Status s = DBPlugin::SanitizeOptions(DBPlugin::Normal, dbname, &db_options,
+                                       &column_families);
+  if (s.ok()) {
+    s = DBPlugin::ValidateOptions(DBPlugin::Normal, dbname, db_options,
+                                  column_families);
   }
-
-  s = ValidateOptions(dbname, db_options, column_families);
   if (!s.ok()) {
     return s;
   }
@@ -1657,7 +1622,7 @@ Status DBImpl::Open(
     impl->StartTimedTasks();
   }
   if (s.ok()) {
-    s = DBPlugin::Open(impl, *handles, dbptr);
+    s = DBPlugin::Open(DBPlugin::Normal, impl, *handles, dbptr);
   }
 
   if (!s.ok()) {
