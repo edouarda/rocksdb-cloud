@@ -46,6 +46,7 @@
 #include "port/port_posix.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
+#include "rocksdb/convenience.h"
 #include "rocksdb/options.h"
 #include "util/stderr_logger.h"
 #include "util/string_util.h"
@@ -337,14 +338,18 @@ class S3WritableFile : public CloudStorageWritableFileImpl {
                  const EnvOptions& options)
       : CloudStorageWritableFileImpl(env, local_fname, bucket, cloud_fname,
                                      options) {}
-  virtual const char* Name() const override { return "s3"; }
+  virtual const char* Name() const override {
+    return CloudStorageProvider::kS3ProviderName;
+  }
 };
 
 /******************** S3StorageProvider ******************/
 class S3StorageProvider : public CloudStorageProviderImpl {
  public:
   ~S3StorageProvider() override {}
-  virtual const char* Name() const override { return "s3"; }
+  const char* Name() const override {
+    return CloudStorageProvider::kS3ProviderName;
+  }
   Status CreateBucket(const std::string& bucket) override;
   Status ExistsBucket(const std::string& bucket) override;
   Status EmptyBucket(const std::string& bucket_name,
@@ -388,8 +393,8 @@ class S3StorageProvider : public CloudStorageProviderImpl {
                               const std::string& object_path,
                               std::unique_ptr<CloudStorageWritableFile>* result,
                               const EnvOptions& options) override;
+  Status PrepareOptions(const ConfigOptions& opts) override;
  protected:
-  Status Initialize(CloudEnv* env) override;
   Status DoGetObject(const std::string& bucket_name,
                      const std::string& object_path,
                      const std::string& destination,
@@ -409,43 +414,52 @@ class S3StorageProvider : public CloudStorageProviderImpl {
   std::shared_ptr<AwsS3ClientWrapper> s3client_;
 };
 
-Status S3StorageProvider::Initialize(CloudEnv* env) {
-  Status status = CloudStorageProviderImpl::Initialize(env);
-  if (!status.ok()) {
-    return status;
-  }
-  const CloudEnvOptions& cloud_opts = env->GetCloudEnvOptions();
-  // TODO: support buckets being in different regions
-  if (!env->SrcMatchesDest() && env->HasSrcBucket() && env->HasDestBucket()) {
-    if (cloud_opts.src_bucket.GetRegion() !=
-        cloud_opts.dest_bucket.GetRegion()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env->info_log_,
-          "[aws] NewAwsEnv Buckets %s, %s in two different regions %s, %s "
-          "is not supported",
-          cloud_opts.src_bucket.GetBucketName().c_str(),
-          cloud_opts.dest_bucket.GetBucketName().c_str(),
-          cloud_opts.src_bucket.GetRegion().c_str(),
-          cloud_opts.dest_bucket.GetRegion().c_str());
-      return Status::InvalidArgument("Two different regions not supported");
+Status S3StorageProvider::PrepareOptions(const ConfigOptions& opts) {
+
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kAwsEnvName);
+  if (cloud_env == nullptr) {
+    status_ = Status::InvalidArgument("StorageProvider requires AWS env ", opts.env->GetId());
+  } else {
+    const auto & cloud_opts = cloud_env->GetCloudEnvOptions();
+    // TODO: support buckets being in different regions
+    if (!cloud_env->SrcMatchesDest() && 
+        cloud_env->HasSrcBucket() && cloud_env->HasDestBucket()) {
+      if (cloud_opts.src_bucket.GetRegion() !=
+          cloud_opts.dest_bucket.GetRegion()) {
+        Log(InfoLogLevel::ERROR_LEVEL, cloud_env->info_log_,
+            "[%s] Buckets %s, %s in two different regions %s, %s "
+            "is not supported",
+            Name(),
+            cloud_opts.src_bucket.GetBucketName().c_str(),
+            cloud_opts.dest_bucket.GetBucketName().c_str(),
+            cloud_opts.src_bucket.GetRegion().c_str(),
+            cloud_opts.dest_bucket.GetRegion().c_str());
+        status_ = Status::InvalidArgument("Two different regions not supported");
+        return status_;
+      }
     }
-  }
-  Aws::Client::ClientConfiguration config;
-  status = AwsCloudOptions::GetClientConfiguration(
-      env, cloud_opts.src_bucket.GetRegion(), &config);
-  if (status.ok()) {
-    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
-    status = cloud_opts.credentials.GetCredentialsProvider(&creds);
-    if (!status.ok()) {
-      Log(InfoLogLevel::INFO_LEVEL, env->info_log_,
-          "[aws] NewAwsEnv - Bad AWS credentials");
-    } else {
-      Header(env->info_log_, "S3 connection to endpoint in region: %s",
-             config.region.c_str());
-      s3client_ =
+    Aws::Client::ClientConfiguration config;
+    status_ = AwsCloudOptions::GetClientConfiguration(
+      cloud_env, cloud_opts.src_bucket.GetRegion(), &config);
+    if (status_.ok()) {
+      std::shared_ptr<Aws::Auth::AWSCredentialsProvider> creds;
+      status_ = cloud_opts.credentials.GetCredentialsProvider(&creds);
+      if (!status_.ok()) {
+        Log(InfoLogLevel::INFO_LEVEL, cloud_env->info_log_,
+            "[%s] Bad AWS credentials", Name());
+      } else {
+        Header(cloud_env->info_log_, "S3 connection to endpoint in region: %s",
+               config.region.c_str());
+        s3client_ =
           std::make_shared<AwsS3ClientWrapper>(creds, config, cloud_opts);
+      }
     }
   }
-  return status;
+  if (!status_.ok()) {
+    return status_;
+  } else {
+    return CloudStorageProviderImpl::PrepareOptions(opts);
+  }
 }
 
 //
@@ -863,7 +877,7 @@ Status S3StorageProvider::DoPutObject(const std::string& local_file,
 #endif /* USE_AWS */
 
 Status CloudStorageProviderImpl::CreateS3Provider(
-    std::shared_ptr<CloudStorageProvider>* provider) {
+    std::unique_ptr<CloudStorageProvider>* provider) {
 #ifndef USE_AWS
   provider->reset();
   return Status::NotSupported(

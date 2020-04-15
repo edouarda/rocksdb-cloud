@@ -11,6 +11,7 @@
 #include "db/forward_iterator.h"
 #include "util/stderr_logger.h"
 #include "rocksdb/env_encryption.h"
+#undef USE_AWS // MJR
 #ifdef USE_AWS
 #include "cloud/cloud_env_impl.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"

@@ -330,8 +330,10 @@ FOLLY_SOURCES = \
 
 
 CLOUD_TEST_SOURCES =                                                    \
-  cloud/db_cloud_test.cc                                                \
+  cloud/aws/aws_options_test.cc                                         \
   cloud/cloud_manifest_test.cc                                          \
+  cloud/cloud_options_test.cc                                           \
+  cloud/db_cloud_test.cc                                                \
   cloud/remote_compaction_test.cc                                       \
 
 TOOLS_MAIN_SOURCES =                                                    \

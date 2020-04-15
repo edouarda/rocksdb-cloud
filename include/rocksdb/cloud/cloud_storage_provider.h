@@ -4,6 +4,7 @@
 
 #include <unordered_map>
 
+#include "rocksdb/customizable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -33,11 +34,16 @@ class CloudStorageWritableFile : public WritableFile {
 // store.  Methods can create and empty buckets, as well as other
 // standard bucket object operations get/put/list/delete
 
-class CloudStorageProvider {
+class CloudStorageProvider : public Customizable {
  public:
   virtual ~CloudStorageProvider();
+  constexpr const static char* kS3ProviderName ="S3";
   static const char* Type() { return "CloudStorageProvider"; }
-  virtual const char* Name() const { return "cloud"; }
+  static Status CreateFromString(const std::string&value,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<CloudStorageProvider>* result);  
+
+  virtual const char* Name() const override { return "cloud"; }
   virtual Status CreateBucket(const std::string& bucket_name) = 0;
   virtual Status ExistsBucket(const std::string& bucket_name) = 0;
 
@@ -109,8 +115,5 @@ class CloudStorageProvider {
       const std::string& bucket, const std::string& fname,
       std::unique_ptr<CloudStorageReadableFile>* result,
       const EnvOptions& options) = 0;
-
-  // Prepares/Initializes the storage provider for the input cloud environment
-  virtual Status Prepare(CloudEnv* env);
 };
 }  // namespace rocksdb

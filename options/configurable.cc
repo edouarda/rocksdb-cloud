@@ -111,7 +111,7 @@ Status Configurable::DoConfigureOption(const OptionTypeInfo* opt_info,
                                        void* opt_ptr) {
   Status s;
   if (opt_info == nullptr) {
-    s = Status::NotFound("Could not find option: ", opt_name);
+    s = Status::NotFound("Could not find option: ", short_name);
   } else if (opt_name == short_name) {
     s = ParseOption(*opt_info, opt_name, opt_value, cfg, opt_ptr);
   } else if (opt_info->IsCustomizable() &&

@@ -1,7 +1,6 @@
 // Copyright (c) 2017 Rockset.
 #ifndef ROCKSDB_LITE
 
-#include <unistd.h>
 
 #include "cloud/aws/aws_env.h"
 #include "cloud/cloud_env_impl.h"
@@ -14,85 +13,138 @@
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
+#include "rocksdb/utilities/options_type.h"
 
 namespace rocksdb {
+static CloudEnvOptions dummy_cloud_options;
 
-bool CloudEnvOptions::GetNameFromEnvironment(const char *name, const char *alt, std::string * result) {
-
-  char *value = getenv(name);               // See if name is set in the environment
-  if (value == nullptr && alt != nullptr) { // Not set.  Do we have an alt name?
-    value = getenv(alt);                    // See if alt is in the environment
-  }
-  if (value != nullptr) {                   // Did we find the either name/alt in the env?
-    result->assign(value);                  // Yes, update result
-    return true;                            // And return success
-  } else {
-    return false;                           // No, return not found
-  }
-}
-void CloudEnvOptions::TEST_Initialize(const std::string& bucket,
-                                      const std::string& object,
-                                      const std::string& region) {
-  src_bucket.TEST_Initialize(bucket, object, region);
-  dest_bucket = src_bucket;
-  credentials.TEST_Initialize();
+template <typename T1>
+int offset_of(T1 CloudEnvOptions::*member) {
+  return int(size_t(&(dummy_cloud_options.*member)) - size_t(&dummy_cloud_options));
 }
 
-BucketOptions::BucketOptions() {
-    prefix_ = "rockset.";
-}
+static std::unordered_map<std::string, OptionTypeInfo> basic_cloud_type_info = {
+    {"keep_local_log_files", {offset_of(&CloudEnvOptions::keep_local_log_files), OptionType::kBoolean}},
+    {"keep_local_sst_files", {offset_of(&CloudEnvOptions::keep_local_sst_files), OptionType::kBoolean}},
+    {"purger_periodicity_millis",
+     {offset_of(&CloudEnvOptions::purger_periodicity_millis), OptionType::kUInt64T}},
+    {"validate_file_size",
+     {offset_of(&CloudEnvOptions::validate_filesize), OptionType::kBoolean}},
+    {"create_bucket_if_missing",
+     {offset_of(&CloudEnvOptions::create_bucket_if_missing), OptionType::kBoolean}},
+    {"request_timeout_ms",
+     {offset_of(&CloudEnvOptions::request_timeout_ms), OptionType::kUInt64T}},
+    {"run_purger",
+     {offset_of(&CloudEnvOptions::run_purger), OptionType::kBoolean}},
+    {"ephemeral_resync_on_open",
+     {offset_of(&CloudEnvOptions::ephemeral_resync_on_open), OptionType::kBoolean}},
+    {"skip_dbid_verification",
+     {offset_of(&CloudEnvOptions::skip_dbid_verification), OptionType::kBoolean}},
+    {"bucket.source",
+     {offset_of(&CloudEnvOptions::src_bucket), OptionType::kStruct,
+      OptionVerificationType::kNormal, OptionTypeFlags::kNone,
+      [](const std::string& name, const std::string& value,
+         const ConfigOptions& opts, char* addr) {
+        Status s = OptionTypeInfo::ParseStruct(
+                        "bucket.source", BucketOptions::GetBucketTypeInfo(),
+                        name, value, opts, addr);
+        if (s.ok()) {
+          auto *bucket = reinterpret_cast<BucketOptions*>(addr);
+          bucket->Initialize();
+        }
+        return s;
+      },
+      [](const std::string& name, const char* addr,
+         const ConfigOptions& opts, std::string* value) {
+        return OptionTypeInfo::SerializeStruct(
+                        "bucket.source", BucketOptions::GetBucketTypeInfo(),
+                        name, addr, opts, value);
+      },
+      [](const std::string& name, const char* addr1, const char* addr2,
+         const ConfigOptions& opts, std::string* mismatch) {
+        const auto *bucket1 = reinterpret_cast<const BucketOptions*>(addr1);
+        const auto *bucket2 = reinterpret_cast<const BucketOptions*>(addr2);
+        if (*bucket1 == *bucket2) {
+          return true;
+        } else {
+          return OptionTypeInfo::MatchesStruct(
+                        "bucket.source", BucketOptions::GetBucketTypeInfo(),
+                        name, addr1, addr2, opts, mismatch);
+        }
+      }
+     }},
+    {"bucket.dest",
+     {offset_of(&CloudEnvOptions::dest_bucket), OptionType::kStruct,
+      OptionVerificationType::kNormal, OptionTypeFlags::kNone,
+      [](const std::string& name, const std::string& value,
+         const ConfigOptions& opts, char* addr) {
+        Status s = OptionTypeInfo::ParseStruct(
+                        "bucket.dest", BucketOptions::GetBucketTypeInfo(),
+                        name, value, opts, addr);
+        if (s.ok()) {
+          auto *bucket = reinterpret_cast<BucketOptions*>(addr);
+          bucket->Initialize();
+        }
+        return s;
+      },
+      [](const std::string& name, const char* addr,
+         const ConfigOptions& opts, std::string* value) {
+        return OptionTypeInfo::SerializeStruct(
+                        "bucket.dest", BucketOptions::GetBucketTypeInfo(),
+                        name, addr, opts, value);
+      },
+      [](const std::string& name, const char* addr1, const char* addr2,
+         const ConfigOptions& opts, std::string* mismatch) {
+        const auto *bucket1 = reinterpret_cast<const BucketOptions*>(addr1);
+        const auto *bucket2 = reinterpret_cast<const BucketOptions*>(addr2);
+        if (*bucket1 == *bucket2) {
+          return true;
+        } else {
+          return OptionTypeInfo::MatchesStruct(
+                        "bucket.dest", BucketOptions::GetBucketTypeInfo(),
+                        name, addr1, addr2, opts, mismatch);
+        }
+      }
+     }},
+    {"storage_provider",
+      OptionTypeInfo::AsCustomS<CloudStorageProvider>(
+          offset_of(&CloudEnvOptions::storage_provider),
+          OptionVerificationType::kByName,
+          OptionTypeFlags::kAllowNull | OptionTypeFlags::kDontPrepare)
+    },
+    {"log_controller",
+      OptionTypeInfo::AsCustomS<CloudLogController>(
+          offset_of(&CloudEnvOptions::cloud_log_controller),
+          OptionVerificationType::kByNameAllowFromNull,
+          OptionTypeFlags::kAllowNull | OptionTypeFlags::kDontPrepare)
+    },
+};
 
-void BucketOptions::SetBucketName(const std::string& bucket,
-                                  const std::string& prefix) {
-  if (!prefix.empty()) {
-    prefix_ = prefix;
-  }
-
-  bucket_ = bucket;
-  if (bucket_.empty()) {
-    name_.clear();
-  } else {
-    name_ = prefix_ + bucket_;
-  }
-}
-
-// Initializes the bucket properties
-
-void BucketOptions::TEST_Initialize(const std::string& bucket,
-                                    const std::string& object,
-                                    const std::string& region) {
-  std::string prefix;
-  // If the bucket name is not set, then the bucket name is not set,
-  // Set it to either the value of the environment variable or geteuid
-  if (!CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_BUCKET_NAME",
-                                               "ROCKSDB_CLOUD_BUCKET_NAME",
-                                               &bucket_)) {
-    bucket_ = bucket + std::to_string(geteuid());
-  }
-  if (CloudEnvOptions::GetNameFromEnvironment(
-          "ROCKSDB_CLOUD_TEST_BUCKET_PREFIX", "ROCKSDB_CLOUD_BUCKET_PREFIX",
-          &prefix)) {
-    prefix_ = prefix;
-  }
-  name_ = prefix_ + bucket_;
-  if (!CloudEnvOptions::GetNameFromEnvironment("ROCKSDB_CLOUD_TEST_OBECT_PATH",
-                                               "ROCKSDB_CLOUD_OBJECT_PATH",
-                                               &object_)) {
-    object_ = object;
-  }
-  if (!CloudEnvOptions::GetNameFromEnvironment(
-          "ROCKSDB_CLOUD_TEST_REGION", "ROCKSDB_CLOUD_REGION", &region_)) {
-    region_ = region;
-  }
-}
+//**TODO: If a CloudEnv extends EnvWrapper. this can go away
+static std::unordered_map<std::string, OptionTypeInfo> env_target_type_info = {
+    {"target",
+     OptionTypeInfo::AsCustomP<Env>(0, OptionVerificationType::kByName, OptionTypeFlags::kNone)
+    },
+};
 
 CloudEnv::CloudEnv(const CloudEnvOptions& options, Env *base, const std::shared_ptr<Logger>& logger)
   : cloud_env_options(options),
     base_env_(base),
     info_log_(logger) {
+  RegisterOptions("BaseEnvOptions", &base_env_, &env_target_type_info); //**See TODO above
+  RegisterOptions(kCloudEnvOpts, &cloud_env_options, &basic_cloud_type_info);
+  
 }
   
 CloudEnv::~CloudEnv() {}
+  
+const Customizable* CloudEnv::FindInstance(const std::string& name) const {
+  if (name == kCloudEnvName) {
+    return this;
+  } else {
+    return Env::FindInstance(name);
+  }
+}
 
 Status CloudEnv::NewAwsEnv(
     Env* base_env, const std::string& src_cloud_bucket,

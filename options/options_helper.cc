@@ -901,7 +901,13 @@ Status OptionTypeInfo::ParseOption(const std::string& opt_name,
     if (opt_addr == nullptr) {
       return Status::NotFound("Could not find option: ", opt_name);
     } else if (parser_func != nullptr) {
-      return parser_func(opt_name, opt_value, options, opt_addr);
+        if (IsEnabled(OptionTypeFlags::kDontPrepare)) {
+          ConfigOptions copy = options;
+          copy.invoke_prepare_options = false;
+          return parser_func(opt_name, opt_value, copy, opt_addr);
+        } else {
+          return parser_func(opt_name, opt_value, options, opt_addr);
+        }
     } else if (ParseOptionHelper(opt_addr, type, opt_value)) {
       return Status::OK();
     } else if (IsConfigurable()) {
@@ -914,8 +920,10 @@ Status OptionTypeInfo::ParseOption(const std::string& opt_name,
       } else if (opt_value.find("=") != std::string::npos) {
         ConfigOptions copy = options;
         copy.ignore_unknown_options = false;
+        if (IsEnabled(OptionTypeFlags::kDontPrepare)) {
+          //copy.invoke_prepare_options = false;
+        }
         return config->ConfigureFromString(opt_value, copy);
-        return config->ConfigureFromString(opt_value, options);
       } else {
         return config->ConfigureOption(opt_name, opt_value, options);
       }

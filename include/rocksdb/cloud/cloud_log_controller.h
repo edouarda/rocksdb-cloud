@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 
+#include "rocksdb/customizable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -47,9 +48,15 @@ class CloudLogWritableFile : public WritableFile {
   Status status_;
 };
 
-class CloudLogController {
+class CloudLogController : public Customizable{
  public:
+  constexpr static const char* kKafkaControllerName = "Kafka";
+  constexpr static const char* kKinesisControllerName = "Kinesis";
   virtual ~CloudLogController();
+   static const char *Type() { return "CloudLogController"; }
+  static Status CreateFromString(const std::string&value,
+                                 const ConfigOptions& opts,
+                                 std::shared_ptr<CloudLogController>* result);  
 
   // Create a stream to store all log files.
   virtual Status CreateStream(const std::string& topic) = 0;
@@ -66,7 +73,7 @@ class CloudLogController {
       const std::string& fname, const EnvOptions& options) = 0;
 
   // Returns name of the cloud log type (Kinesis, etc.).
-  virtual const char* Name() const { return "cloudlog"; }
+  virtual const char* Name() const override { return "cloudlog"; }
 
   // Directory where files are cached locally.
   virtual const std::string& GetCacheDir() const = 0;
@@ -85,8 +92,6 @@ class CloudLogController {
   virtual Status FileExists(const std::string& fname) = 0;
   virtual Status GetFileSize(const std::string& logical_fname,
                              uint64_t* size) = 0;
-  // Prepares/Initializes the log controller for the input cloud environment
-  virtual Status Prepare(CloudEnv* env) = 0;
 };
 
 }  // namespace rocksdb

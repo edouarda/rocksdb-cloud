@@ -19,7 +19,7 @@
 #include <unordered_map>
 
 namespace rocksdb {
-
+  class ObjectLibrary;
 class S3ReadableFile;
 
 
@@ -58,8 +58,12 @@ class AwsEnv : public CloudEnvImpl {
                           const std::shared_ptr<Logger> & info_log, CloudEnv** cenv);
 
   virtual ~AwsEnv();
+  explicit AwsEnv(Env* underlying_env,
+                  const CloudEnvOptions& cloud_options,
+                  const std::shared_ptr<Logger> & info_log = nullptr);
 
-  const char* Name() const override { return "aws"; }
+
+  const char* Name() const override;
 
   // We cannot invoke Aws::ShutdownAPI from the destructor because there could
   // be
@@ -220,10 +224,6 @@ class AwsEnv : public CloudEnvImpl {
   // The AWS credentials are specified to the constructor via
   // access_key_id and secret_key.
   //
-  explicit AwsEnv(Env* underlying_env,
-                  const CloudEnvOptions& cloud_options,
-                  const std::shared_ptr<Logger> & info_log = nullptr);
-
 
 
   // The pathname that contains a list of all db's inside a bucket.
@@ -257,6 +257,9 @@ class AwsEnv : public CloudEnvImpl {
   std::string destname(const std::string& localname);
 };
 
+extern "C" {
+void RegisterAwsObjects(ObjectLibrary& library, const std::string& arg);
+}  // extern "C"
 }  // namespace rocksdb
 
 #endif  // USE_AWS

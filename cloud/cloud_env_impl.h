@@ -19,11 +19,13 @@ class CloudEnvImpl : public CloudEnv {
   friend class CloudEnv;
 
  public:
+  static const std::string kCloudEnvImplName /*="CloudEnvImpl"*/;
   // Constructor
   CloudEnvImpl(const CloudEnvOptions & options, Env* base_env, const std::shared_ptr<Logger>& logger);
 
   virtual ~CloudEnvImpl();
 
+  const Customizable* FindInstance(const std::string& name) const override;
   const CloudType& GetCloudType() const { return cloud_env_options.cloud_type; }
 
   Status SanitizeDirectory(const DBOptions& options,
@@ -104,9 +106,9 @@ class CloudEnvImpl : public CloudEnv {
     return base_env_->GetThreadList(thread_list);
   }
 
+  Status PrepareOptions(const ConfigOptions& opts) override;
+  Status ValidateOptions(const DBOptions& db_opts, const ColumnFamilyOptions& cf_opts) const override;
  protected:
-  virtual Status Prepare();
-
   // Does the dir need to be re-initialized?
   Status NeedsReinitialization(const std::string& clone_dir, bool* do_reinit);
 

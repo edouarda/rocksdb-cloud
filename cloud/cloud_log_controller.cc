@@ -12,6 +12,7 @@
 
 #include "cloud/cloud_log_controller_impl.h"
 #include "cloud/filename.h"
+#include "options/customizable_helper.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/status.h"
 #include "util/coding.h"
@@ -28,6 +29,11 @@ CloudLogWritableFile::~CloudLogWritableFile() {}
 const std::chrono::microseconds CloudLogControllerImpl::kRetryPeriod =
     std::chrono::seconds(30);
 
+Status CloudLogController::CreateFromString(const std::string& value,
+                                              const ConfigOptions& opts,
+                                              std::shared_ptr<CloudLogController>* result) {
+  return LoadSharedObject<CloudLogController>(value, nullptr, opts, result);
+}
 CloudLogController::~CloudLogController() {}
 
 CloudLogControllerImpl::CloudLogControllerImpl() : running_(false) {}
@@ -40,40 +46,67 @@ CloudLogControllerImpl::~CloudLogControllerImpl() {
         "[%s] CloudLogController closing.  Stopping stream.", Name());
     StopTailingStream();
   }
-  Log(InfoLogLevel::DEBUG_LEVEL, env_->info_log_,
-      "[%s] CloudLogController closed.", Name());
+  if (env_ != nullptr) {
+    Log(InfoLogLevel::DEBUG_LEVEL, env_->info_log_,
+        "[%s] CloudLogController closed.", Name());
+  }
 }
 
-Status CloudLogControllerImpl::Initialize(CloudEnv* env) {
-  env_ = env;
-  // Create a random number for the cache directory.
-  const std::string uid = trim(env_->GetBaseEnv()->GenerateUniqueId());
-
-  // Temporary directory for cache.
-  const std::string bucket_dir = kCacheDir + pathsep + env_->GetSrcBucketName();
-  cache_dir_ = bucket_dir + pathsep + uid;
-
-  // Create temporary directories.
-  Status st = env_->GetBaseEnv()->CreateDirIfMissing(kCacheDir);
-  if (st.ok()) {
-    st = env_->GetBaseEnv()->CreateDirIfMissing(bucket_dir);
-  }
-  if (st.ok()) {
-    st = env_->GetBaseEnv()->CreateDirIfMissing(cache_dir_);
-  }
-  return st;
-}
-
-Status CloudLogControllerImpl::Prepare(CloudEnv* env) {
-  if (env != nullptr) {
-    status_ = Initialize(env);
+Status CloudLogControllerImpl::PrepareOptions(const ConfigOptions& opts) {
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud_env != nullptr) {
+    env_ = cloud_env;
+    status_ = CloudLogController::PrepareOptions(opts);
   } else {
-    status_ = Status::NotSupported("LogController requires a CloudEnv");
+    status_ = Status::InvalidArgument("LogController requires cloud env ", opts.env->GetId());
   }
   if (status_.ok()) {
-    status_ = StartTailingStream(env->GetSrcBucketName());
+
+    // Create a random number for the cache directory.
+    const std::string uid = trim(env_->GetBaseEnv()->GenerateUniqueId());
+    
+    // Temporary directory for cache.
+    const std::string bucket_dir = kCacheDir + pathsep + env_->GetSrcBucketName();
+    cache_dir_ = bucket_dir + pathsep + uid;
+    
+    // Create temporary directories.
+    status_ = env_->GetBaseEnv()->CreateDirIfMissing(kCacheDir);
+    if (status_.ok()) {
+      status_ = env_->GetBaseEnv()->CreateDirIfMissing(bucket_dir);
+    }
+    if (status_.ok()) {
+      status_ = env_->GetBaseEnv()->CreateDirIfMissing(cache_dir_);
+    }
   }
   return status_;
+}
+  
+Status CloudLogControllerImpl::ValidateOptions(const DBOptions&db_opts,
+                                               const ColumnFamilyOptions& cf_opts) const {
+  if (status_.ok()) {
+    return CloudLogController::ValidateOptions(db_opts, cf_opts);
+  } else {
+    return status_;
+  }
+}
+  
+Status CloudLogControllerImpl::PrepareOptions(CloudEnv* cloud_env, const ConfigOptions& opts) {
+  Status s;
+  auto & cloud_opts = cloud_env->GetCloudEnvOptions();
+  auto & controller = cloud_opts.cloud_log_controller;
+  if (controller) {
+    ConfigOptions copy = opts;
+    copy.env = cloud_env;
+    s = controller->PrepareOptions(copy);
+    if (!s.ok()) {
+      return s;
+    } else {
+      s = controller->StartTailingStream(cloud_env->GetSrcBucketName());
+    }
+  } else if (!cloud_opts.keep_local_log_files) {
+    s = Status::InvalidArgument("Log controller required for remote log files");
+  }
+  return s;
 }
 
 std::string CloudLogControllerImpl::GetCachePath(

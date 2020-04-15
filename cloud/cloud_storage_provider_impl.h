@@ -7,6 +7,8 @@
 #include "util/random.h"
 
 namespace rocksdb {
+struct ConfigOptions;
+  
 class CloudStorageReadableFileImpl : public CloudStorageReadableFile {
  public:
   CloudStorageReadableFileImpl(const std::shared_ptr<Logger>& info_log,
@@ -102,8 +104,8 @@ class CloudStorageWritableFileImpl : public CloudStorageWritableFile {
 //
 class CloudStorageProviderImpl : public CloudStorageProvider {
  public:
-  static Status CreateS3Provider(std::shared_ptr<CloudStorageProvider>* result);
-
+  static Status CreateS3Provider(std::unique_ptr<CloudStorageProvider>* result);
+  static Status PrepareOptions(CloudEnv* cloud, const ConfigOptions& opts);
   CloudStorageProviderImpl();
   virtual ~CloudStorageProviderImpl();
   Status GetObject(const std::string& bucket_name,
@@ -116,11 +118,11 @@ class CloudStorageProviderImpl : public CloudStorageProvider {
                               const std::string& fname,
                               std::unique_ptr<CloudStorageReadableFile>* result,
                               const EnvOptions& options) override;
-  virtual Status Prepare(CloudEnv* env) override;
+  Status PrepareOptions(const ConfigOptions& opts) override;
+  Status ValidateOptions(const DBOptions&db_opts,
+                         const ColumnFamilyOptions& cf_opts) const override;
  protected:
   Random64 rng_;
-  virtual Status Initialize(CloudEnv* env);
-
   virtual Status DoNewCloudReadableFile(
       const std::string& bucket, const std::string& fname, uint64_t fsize,
       std::unique_ptr<CloudStorageReadableFile>* result,

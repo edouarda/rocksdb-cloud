@@ -1,6 +1,7 @@
 //  Copyright (c) 2016-present, Rockset, Inc.  All rights reserved.
 //
 #pragma once
+#include "rocksdb/configurable.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 
@@ -18,10 +19,10 @@ struct ClientConfiguration;
 }  // namespace Aws
 
 namespace rocksdb {
-
 class CloudEnv;
 class CloudLogController;
 class CloudStorageProvider;
+class OptionTypeInfo;
 
 enum CloudType : unsigned char {
   kCloudNone = 0x0,       // Not really a cloud env
@@ -72,8 +73,8 @@ class AwsCloudAccessCredentials {
   Status GetCredentialsProvider(
       std::shared_ptr<Aws::Auth::AWSCredentialsProvider>* result) const;
 
- private:
   AwsAccessType GetAccessType() const;
+ private:
   Status CheckCredentials(const AwsAccessType& aws_type) const;
 
  public:
@@ -115,6 +116,7 @@ private:
   std::string name_;   // The name of the bucket (prefix_ + bucket_)
 public:
   BucketOptions();
+  static const std::unordered_map<std::string, OptionTypeInfo> *GetBucketTypeInfo();
   // Sets the name of the bucket to be the new bucket name.
   // If prefix is specified, the new bucket name will be [prefix][bucket]
   // If no prefix is specified, the bucket name will use the existing prefix
@@ -124,11 +126,17 @@ public:
   void SetObjectPath(const std::string& object) { object_ = object; }
   const std::string & GetRegion() const { return region_; }
   void SetRegion(const std::string& region)  { region_ = region; }
+  Status ConfigureFromString(const std::string& opts,
+                             const ConfigOptions& options);
+  Status GetOptionString(const ConfigOptions& options,
+                         std::string* result) const;
+  std::string ToString(const ConfigOptions& options) const;
 
   // Initializes the bucket properties for test purposes
   void TEST_Initialize(const std::string& name_prefix,
                        const std::string& object_path,
                        const std::string& region = "");
+  void Initialize();
   bool IsValid() const {
     if (object_.empty() || name_.empty()) {
       return false;
@@ -350,13 +358,16 @@ class CloudEnv : public Env {
 
   CloudEnv(const CloudEnvOptions& options, Env *base, const std::shared_ptr<Logger>& logger);
 public:
+  constexpr static const char* kCloudEnvName = "CloudEnv";
+  constexpr static const char* kAwsEnvName = "AWS";
+  constexpr static const char* kCloudEnvOpts ="CloudEnvOptions";
   std::shared_ptr<Logger> info_log_;  // informational messages
   virtual ~CloudEnv();
   // Returns the underlying env
   Env* GetBaseEnv() {
     return base_env_;
   }
-  virtual const char* Name() const { return "cloud"; }
+  const Customizable* FindInstance(const std::string& name) const override;
 
   virtual Status PreloadCloudManifest(const std::string& local_dbname) = 0;
 

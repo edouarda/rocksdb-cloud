@@ -216,7 +216,8 @@ LIB_SOURCES += utilities/env_librados.cc
 LDFLAGS += -lrados
 endif
 
-AM_LINK = $(AM_V_CCLD)$(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
+AM_LINK = $(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
+#AM_LINK = $(AM_V_CCLD)$(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
 AM_SHARE = $(AM_V_CCLD) $(CXX) $(PLATFORM_SHARED_LDFLAGS)$@ $(CXXFLAGS) $(PLATFORM_SHARED_CFLAGS) -L. $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^) $(LDFLAGS) -o $@
 # detect what platform we're building on
 dummy := $(shell (export ROCKSDB_ROOT="$(CURDIR)"; export PORTABLE="$(PORTABLE)"; "$(CURDIR)/build_tools/build_detect_platform" "$(CURDIR)/make_config.mk"))
@@ -453,12 +454,14 @@ BENCH_OBJECTS = $(patsubst %.cc, $(OBJ_DIR)/%.o, $(BENCH_LIB_SOURCES))
 TOOL_OBJECTS = $(patsubst %.cc, $(OBJ_DIR)/%.o, $(TOOL_LIB_SOURCES))
 ANALYZE_OBJECTS = $(patsubst %.cc, $(OBJ_DIR)/%.o, $(ANALYZER_LIB_SOURCES))
 STRESS_OBJECTS =  $(patsubst %.cc, $(OBJ_DIR)/%.o, $(STRESS_LIB_SOURCES))
+CLOUD_OBJECTS = $(patsubst %.cc, $(OBJ_DIR)/%.o, $(CLOUD_LIB_SOURCES))
 
 ALL_SOURCES  = $(LIB_SOURCES) $(TEST_LIB_SOURCES) $(MOCK_LIB_SOURCES) $(GTEST_DIR)/gtest/gtest-all.cc
 ALL_SOURCES += $(TOOL_LIB_SOURCES) $(BENCH_LIB_SOURCES) $(ANALYZER_LIB_SOURCES) $(STRESS_LIB_SOURCES)
 ALL_SOURCES += $(TEST_MAIN_SOURCES) $(TOOL_MAIN_SOURCES) $(BENCH_MAIN_SOURCES)
+ALL_SOURCES += $(CLOUD_LIB_SOURCES) $(CLOUD_TEST_SOURCES)
 
-TESTS = $(patsubst %.cc, %, $(notdir $(TEST_MAIN_SOURCES)) $(TEST_CLOUD_SOURCES)
+TESTS = $(patsubst %.cc, %, $(notdir $(TEST_MAIN_SOURCES) $(CLOUD_TEST_SOURCES)))
 
 ifeq ($(USE_FOLLY_DISTRIBUTED_MUTEX),1)
 	TESTS += folly_synchronization_distributed_mutex_test
@@ -524,14 +527,14 @@ STATIC_TOOLS_LIBRARY = ${LIBNAME}_tools$(LIBDEBUG).a
 STATIC_STRESS_LIBRARY = ${LIBNAME}_stress$(LIBDEBUG).a
 STATIC_CLOUD_LIBRARY = ${LIBNAME}_cloud$(LIBDEBUG).a
 
-ALL_STATIC_LIBS = $(STATIC_LIBRARY) $(STATIC_TEST_LIBRARY) $(STATIC_TOOLS_LIBRARY) $(STATIC_STRESS_LIBRARY)
+ALL_STATIC_LIBS = $(STATIC_LIBRARY) $(STATIC_TEST_LIBRARY) $(STATIC_TOOLS_LIBRARY) $(STATIC_STRESS_LIBRARY) $(STATIC_CLOUD_LIBRARY)
 
 SHARED_TEST_LIBRARY =  ${LIBNAME}_test$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
 SHARED_TOOLS_LIBRARY = ${LIBNAME}_tools$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
 SHARED_STRESS_LIBRARY = ${LIBNAME}_stress$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
-SHARED_CLOUD_LIBRARY = ${LIBNAME}_CLOUD(LIBDEBUG).$(PLATFORM_SHARED_EXT)
+SHARED_CLOUD_LIBRARY = ${LIBNAME}_cloud$(LIBDEBUG).$(PLATFORM_SHARED_EXT)
  
-ALL_SHARED_LIBS = $(SHARED1) $(SHARED2) $(SHARED3) $(SHARED4) $(SHARED_TEST_LIBRARY) $(SHARED_TOOLS_LIBRARY) $(SHARED_STRESS_LIBRARY)
+ALL_SHARED_LIBS = $(SHARED1) $(SHARED2) $(SHARED3) $(SHARED4) $(SHARED_TEST_LIBRARY) $(SHARED_TOOLS_LIBRARY) $(SHARED_STRESS_LIBRARY) $(SHARED_CLOUD_LIBRARY)
 
 ifeq ($(LIB_MODE),shared)
 LIBRARY=$(SHARED1)
@@ -1044,27 +1047,27 @@ $(STATIC_CLOUD_LIBRARY): $(CLOUD_OBJECTS)
 	$(AM_V_AR)rm -f $@ $(SHARED_CLOUD_LIBRARY)
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
-$(SHARED_TEST_LIBRARY): $(TEST_OBJECTS) $(SHARED1)
+$(SHARED_TEST_LIBRARY): $(TEST_OBJECTS) $(LIBRARY)
 	$(AM_V_AR)rm -f $@ $(STATIC_TEST_LIBRARY)
 	$(AM_SHARE)
 
-$(SHARED_TOOLS_LIBRARY): $(TOOL_OBJECTS) $(TESTUTIL) $(SHARED1)
+$(SHARED_TOOLS_LIBRARY): $(TOOL_OBJECTS) $(TESTUTIL) $(LIBRARY)
 	$(AM_V_AR)rm -f $@ $(STATIC_TOOLS_LIBRARY)
 	$(AM_SHARE)
 
-$(SHARED_STRESS_LIBRARY): $(TESTUTIL) $(ANALYZE_OBJECTS) $(STRESS_OBJECTS) $(SHARED1)
+$(SHARED_STRESS_LIBRARY): $(TESTUTIL) $(ANALYZE_OBJECTS) $(STRESS_OBJECTS) $(LIBRARY)
 	$(AM_V_AR)rm -f $@ $(STATIC_STRESS_LIBRARY)
 	$(AM_SHARE)
 
-$(SHARED_CLOUD_LIBRARY): $(CLOUD_OBJECTS)
-	$(AM_V_AR)rm -f $@ $(STATIC_CLOUD_LIBRARY)
+$(SHARED_CLOUD_LIBRARY): $(CLOUD_OBJECTS) $(LIBRARY) 
+	$(AM_V_AR)rm -f $@ $(STATIC_CLOUD_LIBRARY) 
 	$(AM_SHARE)
 
 librocksdb_env_basic_test.a: $(OBJ_DIR)/env/env_basic_test.o $(LIB_OBJECTS) $(TESTHARNESS)
 	$(AM_V_AR)rm -f $@
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $^
 
-db_bench: $(OBJ_DIR)/tools/db_bench.o $(BENCH_OBJECTS) $(TXNTESTUTIL) $(TESTUTIL) $(LIBRARY)
+db_bench: $(OBJ_DIR)/tools/db_bench.o $(BENCH_OBJECTS) $(TXNTESTUTIL) $(TESTUTIL) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 trace_analyzer: $(OBJ_DIR)/tools/trace_analyzer.o $(ANALYZE_OBJECTS) $(TOOLS_LIBRARY) $(LIBRARY)
@@ -1237,7 +1240,7 @@ db_merge_operand_test: $(OBJ_DIR)/db/db_merge_operand_test.o $(TEST_LIBRARY) $(L
 db_options_test: $(OBJ_DIR)/db/db_options_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-db_plugin_test: db/db_plugin_test.o db/db_test_util.o $(TEST_LIBRARY) $(LIBRARY)
+db_plugin_test: $(OBJ_DIR)/db/db_plugin_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 db_range_del_test: $(OBJ_DIR)/db/db_range_del_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1491,10 +1494,10 @@ thread_list_test: $(OBJ_DIR)/util/thread_list_test.o $(TEST_LIBRARY) $(LIBRARY)
 compact_files_test: $(OBJ_DIR)/db/compact_files_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-configurable_test: options/configurable_test.o $(TEST_LIBRARY) $(LIBRARY)
+configurable_test: $(OBJ_DIR)/options/configurable_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-customizable_test: options/customizable_test.o $(TEST_LIBRARY) $(LIBRARY)
+customizable_test: $(OBJ_DIR)/options/customizable_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 options_test: $(OBJ_DIR)/options/options_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1548,7 +1551,7 @@ write_callback_test: $(OBJ_DIR)/db/write_callback_test.o $(TEST_LIBRARY) $(LIBRA
 heap_test: $(OBJ_DIR)/util/heap_test.o $(GTEST)
 	$(AM_LINK)
 
-transaction_lock_mgr_test: utilities/transactions/transaction_lock_mgr_test.o $(TEST_LIBRARY) $(LIBRARY)
+transaction_lock_mgr_test: $(OBJ_DIR)/utilities/transactions/transaction_lock_mgr_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 transaction_test: $(OBJ_DIR)/utilities/transactions/transaction_test.o $(TEST_LIBRARY) $(LIBRARY)
@@ -1575,14 +1578,25 @@ ldb_cmd_test: $(OBJ_DIR)/tools/ldb_cmd_test.o $(TOOLS_LIBRARY) $(TEST_LIBRARY) $
 ldb: $(OBJ_DIR)/tools/ldb.o $(TOOLS_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-remote_compaction_test: cloud/remote_compaction_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+remote_compaction_test: $(OBJ_DIR)/cloud/remote_compaction_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-db_cloud_test: cloud/db_cloud_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+db_cloud_test: $(OBJ_DIR)/cloud/db_cloud_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-cloud_manifest_test: cloud/cloud_manifest_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+cloud_manifest_test: $(OBJ_DIR)/cloud/cloud_manifest_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
+
+cloud_options_test: $(OBJ_DIR)/cloud/cloud_options_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
+ifeq ($(LIB_MODE),shared)
+aws_options_test: $(OBJ_DIR)/cloud/aws/aws_options_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+else
+aws_options_test: $(OBJ_DIR)/cloud/aws/aws_options_test.o $(TEST_LIBRARY) $(CLOUD_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+endif
 
 iostats_context_test: $(OBJ_DIR)/monitoring/iostats_context_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_V_CCLD)$(CXX) $^ $(EXEC_LDFLAGS) -o $@ $(LDFLAGS)
@@ -1635,7 +1649,7 @@ blob_file_addition_test: $(OBJ_DIR)/db/blob/blob_file_addition_test.o $(TEST_LIB
 blob_file_garbage_test: $(OBJ_DIR)/db/blob/blob_file_garbage_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
-timer_test: util/timer_test.o $(LIBOBJECTS) $(TESTHARNESS)
+timer_test: $(OBJ_DIR)/util/timer_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 #-------------------------------------------------

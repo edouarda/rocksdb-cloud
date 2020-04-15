@@ -11,6 +11,7 @@
 #include "cloud/cloud_storage_provider_impl.h"
 #include "cloud/filename.h"
 #include "file/filename.h"
+#include "options/customizable_helper.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
@@ -20,7 +21,6 @@
 #include "util/string_util.h"
 
 namespace rocksdb {
-
 /******************** Readablefile ******************/
 CloudStorageReadableFileImpl::CloudStorageReadableFileImpl(
     const std::shared_ptr<Logger>& info_log, const std::string& bucket,
@@ -253,55 +253,76 @@ Status CloudStorageWritableFileImpl::Sync() {
   return stat;
 }
 
-CloudStorageProvider::~CloudStorageProvider() {}
-
-Status CloudStorageProvider::Prepare(CloudEnv* env) {
-  Status st;
-  if (env->HasDestBucket()) {
-    // create dest bucket if specified
-    if (ExistsBucket(env->GetDestBucketName()).ok()) {
-      Log(InfoLogLevel::INFO_LEVEL, env->info_log_,
-          "[%s] Bucket %s already exists", Name(),
-          env->GetDestBucketName().c_str());
-    } else if (env->GetCloudEnvOptions().create_bucket_if_missing) {
-      Log(InfoLogLevel::INFO_LEVEL, env->info_log_,
-          "[%s] Going to create bucket %s", Name(),
-          env->GetDestBucketName().c_str());
-      st = CreateBucket(env->GetDestBucketName());
-    } else {
-      st = Status::NotFound(
-          "Bucket not found and create_bucket_if_missing is false");
-    }
-    if (!st.ok()) {
-      Log(InfoLogLevel::ERROR_LEVEL, env->info_log_,
-          "[%s] Unable to create bucket %s %s", Name(),
-          env->GetDestBucketName().c_str(), st.ToString().c_str());
-      return st;
-    }
-  }
-  return st;
+Status CloudStorageProvider::CreateFromString(const std::string& value,
+                                              const ConfigOptions& opts,
+                                              std::shared_ptr<CloudStorageProvider>* result) {
+  return LoadSharedObject<CloudStorageProvider>(value, nullptr, opts, result);
 }
+
+CloudStorageProvider::~CloudStorageProvider() {}
 
 CloudStorageProviderImpl::CloudStorageProviderImpl() : rng_(time(nullptr)) {}
 
 CloudStorageProviderImpl::~CloudStorageProviderImpl() {}
 
-Status CloudStorageProviderImpl::Prepare(CloudEnv* env) {
-  status_ = Initialize(env);
-  if (status_.ok()) {
-    status_ = CloudStorageProvider::Prepare(env);
+Status CloudStorageProviderImpl::PrepareOptions(CloudEnv *cloud_env, const ConfigOptions& opts) {
+  Status s;
+  auto & cloud_opts = cloud_env->GetCloudEnvOptions();
+  auto & provider = cloud_opts.storage_provider;
+  if (provider) {
+    ConfigOptions copy = opts;
+    copy.env = cloud_env;
+    s = provider->PrepareOptions(copy);
+    if (!s.ok()) {
+      return s;
+    } else if (cloud_env->HasDestBucket()) {
+      // create dest bucket if specified
+      if (provider->ExistsBucket(cloud_env->GetDestBucketName()).ok()) {
+        Log(InfoLogLevel::INFO_LEVEL, cloud_env->info_log_,
+            "[%s] Bucket %s already exists", provider->Name(),
+            cloud_env->GetDestBucketName().c_str());
+      } else if (cloud_opts.create_bucket_if_missing) {
+        Log(InfoLogLevel::INFO_LEVEL, cloud_env->info_log_,
+            "[%s] Going to create bucket %s", provider->Name(),
+            cloud_env->GetDestBucketName().c_str());
+        s = provider->CreateBucket(cloud_env->GetDestBucketName());
+      } else {
+        s = Status::NotFound("Bucket not found and create_bucket_if_missing is false");
+      }
+      if (!s.ok()) {
+        Log(InfoLogLevel::ERROR_LEVEL, cloud_env->info_log_,
+            "[%s] Unable to create bucket %s %s", provider->Name(),
+            cloud_env->GetDestBucketName().c_str(), s.ToString().c_str());
+      }
+    }
+  } else if (cloud_opts.dest_bucket.IsValid() ||
+             cloud_opts.src_bucket.IsValid()) {
+    s = Status::InvalidArgument("Cloud environment requires a storage provider");
   }
-  if (status_.ok()) {
-    env_ = env;
+  return s;
+}
+
+Status CloudStorageProviderImpl::PrepareOptions(const ConfigOptions& opts) {
+  auto *cloud_env = opts.env->CastAs<CloudEnv>(CloudEnv::kCloudEnvName);
+  if (cloud_env != nullptr) {
+    env_ = cloud_env;
+    status_ = CloudStorageProvider::PrepareOptions(opts);
+  } else {
+    status_ = Status::InvalidArgument("StorageProvider requires cloud env ", opts.env->GetId());
   }
   return status_;
 }
 
-Status CloudStorageProviderImpl::Initialize(CloudEnv* env) {
-  env_ = env;
-  return Status::OK();
+Status CloudStorageProviderImpl::ValidateOptions(const DBOptions&db_opts,
+                                                 const ColumnFamilyOptions& cf_opts) const {
+  if (!status_.ok()) {
+    return status_;
+  } else if (env_ == nullptr) {
+    return Status::InvalidArgument("StorageProvider requires cloud env ", GetId());
+  } 
+  return CloudStorageProvider::ValidateOptions(db_opts, cf_opts);
 }
-
+  
 Status CloudStorageProviderImpl::NewCloudReadableFile(
     const std::string& bucket, const std::string& fname,
     std::unique_ptr<CloudStorageReadableFile>* result,

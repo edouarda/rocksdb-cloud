@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "cloud/cloud_env_impl.h"
+#include "cloud/cloud_storage_provider_impl.h"
 #include "rocksdb/cloud/cloud_env_options.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/env.h"
@@ -102,11 +103,11 @@ class MockStorageProvider : public CloudStorageProvider {
 // May be useful to clients who wish to override just part of the
 // functionality of another Env.
 
-class MockCloudEnv : public CloudEnv {
+class MockCloudEnv : public CloudEnvImpl {
  public:
   // Initialize an EnvWrapper that delegates all calls to *t
   explicit MockCloudEnv(const CloudEnvOptions& opts = CloudEnvOptions())
-      : CloudEnv(opts, Env::Default(), nullptr) {
+      : CloudEnvImpl(opts, Env::Default(), nullptr) {
     notsup_ = Status::NotSupported();
   }
 
@@ -140,6 +141,14 @@ class MockCloudEnv : public CloudEnv {
   }
   virtual Status DeleteDbid(const std::string& /*bucket_name*/,
                             const std::string& /*dbid*/) override {
+    return notsup_;
+  }
+
+  virtual std::string RemapFilename(const std::string& logical_name) const override {
+    return logical_name;
+  }
+  virtual Status CopyLocalFileToDest(const std::string& /*local_name*/,
+                                     const std::string& /*cloud_name*/) override {
     return notsup_;
   }
 
