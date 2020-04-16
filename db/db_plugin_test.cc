@@ -6,6 +6,8 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
+#include "rocksdb/db_plugin.h"
+
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -14,7 +16,6 @@
 #include "options/options_helper.h"
 #include "port/stack_trace.h"
 #include "rocksdb/convenience.h"
-#include "rocksdb/db_plugin.h"
 #include "rocksdb/utilities/stackable_db.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -24,59 +25,67 @@ class DBPluginTest : public DBTestBase {
   DBPluginTest() : DBTestBase("/db_plugin_test") {}
 };
 
-class DefaultPlugin: public DBPlugin {
-public:
-  const char *Name() const override { return "DefaultPlugin"; }
+class DefaultPlugin : public DBPlugin {
+ public:
+  const char* Name() const override { return "DefaultPlugin"; }
 };
-  
-class CountingPlugin: public DBPlugin {
-public:
+
+class CountingPlugin : public DBPlugin {
+ public:
   CountingPlugin(const std::string& name = "CountingPlugin") : name_(name) {
     reset();
   }
-  const char *Name() const override { return name_.c_str(); }
+  const char* Name() const override { return name_.c_str(); }
   Status SanitizeCB(
-      const std::string& db_name, DBOptions* db_options,
+      OpenMode mode, const std::string& db_name, DBOptions* db_options,
       std::vector<ColumnFamilyDescriptor>* column_families) override {
     if (sanitized < 0) {
       return Status::InvalidArgument("Cannot sanitize");
     } else {
       sanitized++;
-      return DBPlugin::SanitizeCB(db_name, db_options, column_families);
+      return DBPlugin::SanitizeCB(mode, db_name, db_options, column_families);
     }
   }
-  
-  Status ValidateCB(
-      const std::string& db_name, const DBOptions& db_options,
-      const std::vector<ColumnFamilyDescriptor>& column_families) const override {
+
+  Status ValidateCB(OpenMode mode, const std::string& db_name,
+                    const DBOptions& db_options,
+                    const std::vector<ColumnFamilyDescriptor>& column_families)
+      const override {
     if (validated < 0) {
       return Status::InvalidArgument("Cannot validatee");
     } else {
       validated++;
-      return DBPlugin::ValidateCB(db_name, db_options, column_families);
+      return DBPlugin::ValidateCB(mode, db_name, db_options, column_families);
     }
   }
-  
-  Status OpenCB(DB* db, const std::vector<ColumnFamilyHandle*>& handles,
+
+  Status OpenCB(OpenMode mode, DB* db,
+                const std::vector<ColumnFamilyHandle*>& handles,
                 DB** wrapped) override {
-    if (opened < 0) {
-      return Status::InvalidArgument("Cannot open");
+    if (mode == OpenMode::ReadOnly) {
+      if (readonly < 0) {
+        return Status::InvalidArgument("Cannot open readonly");
+      } else {
+        readonly++;
+      }
+    } else if (mode == OpenMode::Normal) {
+      if (opened < 0) {
+        return Status::InvalidArgument("Cannot open");
+      } else {
+        opened++;
+      }
+    }
+    return DBPlugin::OpenCB(mode, new StackableDB(db), handles, wrapped);
+  }
+
+  bool SupportsOpenMode(OpenMode mode) const override {
+    if (mode == OpenMode::ReadOnly) {
+      return supports_ro;
     } else {
-      opened++;
-      return DBPlugin::OpenCB(new StackableDB(db), handles, wrapped);
+      return mode == OpenMode::Normal;
     }
   }
-  bool SupportsReadOnly() const override { return supports_ro; }
-   Status OpenReadOnlyCB(
-      DB* db, const std::vector<ColumnFamilyHandle*>& handles,
-      DB** wrapped) override {
-     if (readonly < 0) {
-       return Status::InvalidArgument("Cannot open readonly");
-     } else {
-       readonly++;
-       return DBPlugin::OpenReadOnlyCB(db, handles, wrapped);
-     }
-   }
+
   Status RepairCB(const std::string& dbname, const DBOptions& db_options,
                   const std::vector<ColumnFamilyDescriptor>& column_families,
                   const ColumnFamilyOptions& unknown_cf_opts) override {
@@ -84,11 +93,13 @@ public:
       return Status::InvalidArgument("Cannot repair");
     } else {
       repaired++;
-      return DBPlugin::RepairCB(dbname, db_options, column_families, unknown_cf_opts);
+      return DBPlugin::RepairCB(dbname, db_options, column_families,
+                                unknown_cf_opts);
     }
   }
-  Status DestroyCB(const std::string& name, const Options& options,
-                   const std::vector<ColumnFamilyDescriptor>& column_families) override {
+  Status DestroyCB(
+      const std::string& name, const Options& options,
+      const std::vector<ColumnFamilyDescriptor>& column_families) override {
     if (destroyed < 0) {
       return Status::InvalidArgument("Cannot destroy");
     } else {
@@ -115,7 +126,7 @@ public:
   int repaired;
   int destroyed;
 };
-  
+
 TEST_F(DBPluginTest, TestDefaultPlugin) {
   // GetOptions should be able to get latest option changed by SetOptions.
   Options options;
@@ -153,7 +164,7 @@ TEST_F(DBPluginTest, TestNoSanitize) {
   ASSERT_TRUE(counter->sanitized > 0);
   ASSERT_EQ(db_, nullptr);
 }
-  
+
 TEST_F(DBPluginTest, TestOpenFailed) {
   Options options;
   std::shared_ptr<CountingPlugin> counter = std::make_shared<CountingPlugin>();
@@ -172,8 +183,10 @@ TEST_F(DBPluginTest, TestOpenFailed) {
 
 TEST_F(DBPluginTest, TestTwoPlugins) {
   Options options;
-  std::shared_ptr<CountingPlugin> counter1 = std::make_shared<CountingPlugin>("Counter1");
-  std::shared_ptr<CountingPlugin> counter2 = std::make_shared<CountingPlugin>("Counter2");
+  std::shared_ptr<CountingPlugin> counter1 =
+      std::make_shared<CountingPlugin>("Counter1");
+  std::shared_ptr<CountingPlugin> counter2 =
+      std::make_shared<CountingPlugin>("Counter2");
   options.plugins.push_back(counter1);
   options.plugins.push_back(counter2);
   ASSERT_OK(TryReopen(options));

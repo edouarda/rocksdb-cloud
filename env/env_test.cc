@@ -1924,7 +1924,7 @@ class TestEnv : public EnvWrapper {
         return Status::OK();
       }
       TestEnv* env;
-  };
+    };
 
   void CloseCountInc() { close_count++; }
 

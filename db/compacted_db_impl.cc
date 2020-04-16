@@ -152,7 +152,8 @@ Status CompactedDBImpl::Open(const Options& options,
   std::vector<ColumnFamilyDescriptor> column_families;
   column_families.push_back(
       ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
-  Status s = DBPlugin::SanitizeOptions(dbname, &db_options, &column_families);
+  Status s = DBPlugin::SanitizeOptions(DBPlugin::ReadOnly, dbname, &db_options,
+                                       &column_families);
   if (!s.ok()) {
     return s;
   }
@@ -180,7 +181,7 @@ Status CompactedDBImpl::Open(const Options& options,
         handles.push_back(
             new ColumnFamilyHandleImpl(cfd, db.get(), &db->mutex_));
         *dbptr = db.release();
-        s = DBPlugin::OpenReadOnly(*dbptr, handles, dbptr);
+        s = DBPlugin::Open(DBPlugin::ReadOnly, *dbptr, handles, dbptr);
         delete handles[0];
         if (!s.ok()) {
           // Failure, delete the dbptr

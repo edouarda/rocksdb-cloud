@@ -35,16 +35,18 @@ class TtlDBPlugin : public DBPlugin {
   TtlDBPlugin(const std::vector<int>& ttls);
   const char* Name() const override;
   Status SanitizeCB(
-      const std::string& db_name, DBOptions* db_options,
+      OpenMode mode, const std::string& db_name, DBOptions* db_options,
       std::vector<ColumnFamilyDescriptor>* column_families) override;
-  Status ValidateCB(const std::string& db_name, const DBOptions& db_options,
+  Status ValidateCB(OpenMode mode, const std::string& db_name,
+                    const DBOptions& db_options,
                     const std::vector<ColumnFamilyDescriptor>& column_families)
       const override;
-  Status OpenCB(DB* db, const std::vector<ColumnFamilyHandle*>& handles,
+  Status OpenCB(OpenMode mode, DB* db,
+                const std::vector<ColumnFamilyHandle*>& handles,
                 DB** wrapped) override;
-  bool SupportsReadOnly() const override { return true; }
-  Status OpenReadOnlyCB(DB* db, const std::vector<ColumnFamilyHandle*>& handles,
-                        DB** wrapped) override;
+  bool SupportsOpenMode(OpenMode mode) const override {
+    return (mode == OpenMode::Normal || mode == OpenMode::ReadOnly);
+  }
   Status PrepareTtlOptions(int ttl, Env* env,
                            ColumnFamilyOptions* cf_options) const;
 
