@@ -13,6 +13,7 @@
 #include "cloud/aws/aws_env.h"
 #include "cloud/aws/aws_file.h"
 #include "cloud/db_cloud_impl.h"
+#include "cloud/db_cloud_plugin.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
 #include "file/filename.h"
@@ -128,7 +129,7 @@ class CloudTest : public testing::Test {
   }
 
   // Open database via the cloud interface
-  void OpenDB() {
+  void OpenDB(bool use_cloud_open = true) {
     ASSERT_TRUE(cloud_env_options_.credentials.HasValid().ok());
 
     // Create new AWS env
@@ -146,9 +147,17 @@ class CloudTest : public testing::Test {
     std::vector<ColumnFamilyHandle*> handles;
 
     ASSERT_TRUE(db_ == nullptr);
-    ASSERT_OK(DBCloud::Open(options_, dbname_, column_families,
-                            persistent_cache_path_, persistent_cache_size_gb_,
-                            &handles, &db_));
+    if (use_cloud_open) {
+      ASSERT_OK(DBCloud::Open(options_, dbname_, column_families,
+                              persistent_cache_path_, persistent_cache_size_gb_,
+                              &handles, &db_));
+    } else {
+      printf("MJR: Using Standard open\n");
+      DB *basic_db;
+      ASSERT_OK(DB::Open(options_, dbname_, column_families,
+                         &handles, &basic_db));
+      db_ = static_cast<DBCloud*>(basic_db);
+    }
     ASSERT_OK(db_->GetDbIdentity(dbid_));
 
     // Delete the handle for the default column family because the DBImpl
@@ -1443,6 +1452,30 @@ TEST_F(CloudTest, PersistentCache) {
 }
 #endif /* AWS_DO_NOT_RUN */
 
+TEST_F(CloudTest, BasicPluginTest) {
+  // Put one key-value
+  auto plugin = std::make_shared<cloud::CloudDBPlugin>(persistent_cache_path_,
+                                                       persistent_cache_size_gb_);
+  options_.plugins.push_back(plugin);
+  
+  OpenDB(false);
+  std::string value;
+  ASSERT_OK(db_->Put(WriteOptions(), "Hello", "World"));
+  ASSERT_OK(db_->Get(ReadOptions(), "Hello", &value));
+  ASSERT_TRUE(value.compare("World") == 0);
+  CloseDB();
+  value.clear();
+
+  // Reopen and validate
+  OpenDB(false);
+  ASSERT_OK(db_->Get(ReadOptions(), "Hello", &value));
+  ASSERT_EQ(value, "World");
+
+  std::set<uint64_t> live_files;
+  ASSERT_OK(GetCloudLiveFilesSrc(&live_files));
+  ASSERT_GT(live_files.size(), 0);
+  CloseDB();
+}
 }  //  namespace rocksdb
 
 // A black-box test for the cloud wrapper around rocksdb

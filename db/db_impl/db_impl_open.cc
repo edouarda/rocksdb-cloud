@@ -1342,6 +1342,8 @@ Status DBImpl::Open(
   DBOptions db_options = db_options_in;
   std::vector<ColumnFamilyDescriptor> column_families = column_families_in;
   bool owns_info_log = (db_options.info_log == nullptr);
+  *dbptr = nullptr;
+  handles->clear();
   Status s = DBPlugin::SanitizeOptions(DBPlugin::Normal, dbname, &db_options,
                                        &column_families);
   if (s.ok()) {
@@ -1352,8 +1354,6 @@ Status DBImpl::Open(
     return s;
   }
 
-  *dbptr = nullptr;
-  handles->clear();
 
   size_t max_write_buffer_size = 0;
   for (auto cf : column_families) {

@@ -1,59 +1,20 @@
 // Copyright (c) 2017 Rockset.
 #ifndef ROCKSDB_LITE
-
-#ifndef __STDC_FORMAT_MACROS
-#define __STDC_FORMAT_MACROS
-#endif
-
 #include "cloud/db_cloud_impl.h"
 
-#include <inttypes.h>
-
-#include "cloud/aws/aws_env.h"
+#include "cloud/db_cloud_plugin.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
 #include "file/file_util.h"
-#include "file/sst_file_manager_impl.h"
-#include "logging/auto_roll_logger.h"
 #include "rocksdb/cloud/cloud_storage_provider.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
-#include "rocksdb/persistent_cache.h"
 #include "rocksdb/status.h"
-#include "rocksdb/table.h"
 #include "util/xxhash.h"
 
 namespace rocksdb {
-
-namespace {
-/**
- * This ConstantSstFileManager uses the same size for every sst files added.
- */
-class ConstantSizeSstFileManager : public SstFileManagerImpl {
- public:
-  ConstantSizeSstFileManager(int64_t constant_file_size, Env* env,
-                             std::shared_ptr<Logger> logger,
-                             int64_t rate_bytes_per_sec,
-                             double max_trash_db_ratio,
-                             uint64_t bytes_max_delete_chunk)
-    : SstFileManagerImpl(env, std::make_shared<LegacyFileSystemWrapper>(env),
-                         std::move(logger), rate_bytes_per_sec,
-                         max_trash_db_ratio, bytes_max_delete_chunk),
-        constant_file_size_(constant_file_size) {
-    assert(constant_file_size_ >= 0);
-  }
-
-  Status OnAddFile(const std::string& file_path, bool compaction) override {
-    return SstFileManagerImpl::OnAddFile(
-        file_path, uint64_t(constant_file_size_), compaction);
-  }
-
- private:
-  const int64_t constant_file_size_;
-};
-}  // namespace
 
 DBCloudImpl::DBCloudImpl(DB* db) : DBCloud(db), cenv_(nullptr) {}
 
@@ -90,73 +51,11 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
                      bool read_only) {
   Status st;
   Options options = opt;
-
-  // Created logger if it is not already pre-created by user.
-  if (!options.info_log) {
-    CreateLoggerFromOptions(local_dbname, options, &options.info_log);
+  if (DBPlugin::Find(CloudOptionNames::kNameCloud, options.plugins) == nullptr) {
+    options.plugins.push_back(
+        std::make_shared<cloud::CloudDBPlugin>(persistent_cache_path,
+                                               persistent_cache_size_gb));
   }
-
-  CloudEnvImpl* cenv = static_cast<CloudEnvImpl*>(options.env);
-  if (!cenv->info_log_) {
-    cenv->info_log_ = options.info_log;
-  }
-
-  // Use a constant sized SST File Manager if necesary.
-  // NOTE: if user already passes in an SST File Manager, we will respect user's
-  // SST File Manager instead.
-  auto constant_sst_file_size =
-      cenv->GetCloudEnvOptions().constant_sst_file_size_in_sst_file_manager;
-  if (constant_sst_file_size >= 0 && options.sst_file_manager == nullptr) {
-    // rate_bytes_per_sec, max_trash_db_ratio, bytes_max_delete_chunk are
-    // default values in NewSstFileManager.
-    // If users don't use Options.sst_file_manager, then these values are used
-    // currently when creating an SST File Manager.
-    options.sst_file_manager = std::make_shared<ConstantSizeSstFileManager>(
-        constant_sst_file_size, options.env, options.info_log,
-        0 /* rate_bytes_per_sec */, 0.25 /* max_trash_db_ratio */,
-        64 * 1024 * 1024 /* bytes_max_delete_chunk */);
-  }
-
-  Env* local_env = cenv->GetBaseEnv();
-  if (!read_only) {
-    local_env->CreateDirIfMissing(
-        local_dbname);  // MJR: TODO: Move into sanitize
-  }
-
-  st = cenv->SanitizeDirectory(options, local_dbname, read_only);
-
-  if (st.ok()) {
-    st = cenv->LoadCloudManifest(local_dbname, read_only);
-  }
-  if (!st.ok()) {
-    return st;
-  }
-  // If a persistent cache path is specified, then we set it in the options.
-  if (!persistent_cache_path.empty() && persistent_cache_size_gb) {
-    // Get existing options. If the persistent cache is already set, then do
-    // not make any change. Otherwise, configure it.
-    auto bopt = options.table_factory->GetOptions<BlockBasedTableOptions>(TableFactory::kBlockBasedTableOpts);
-    if (bopt != nullptr && !bopt->persistent_cache) {
-      std::shared_ptr<PersistentCache> pcache;
-      st = NewPersistentCache(options.env, persistent_cache_path,
-                              persistent_cache_size_gb * 1024L * 1024L * 1024L,
-                              options.info_log, false, &pcache);
-      if (st.ok()) {
-        bopt->persistent_cache = pcache;
-        Log(InfoLogLevel::INFO_LEVEL, options.info_log,
-            "Created persistent cache %s with size %" PRIu64 "GB",
-            persistent_cache_path.c_str(), persistent_cache_size_gb);
-      } else {
-        Log(InfoLogLevel::INFO_LEVEL, options.info_log,
-            "Unable to create persistent cache %s. %s",
-            persistent_cache_path.c_str(), st.ToString().c_str());
-        return st;
-      }
-    }
-  }
-  // We do not want a very large MANIFEST file because the MANIFEST file is
-  // uploaded to S3 for every update, so always enable rolling of Manifest file
-  options.max_manifest_file_size = DBCloudImpl::max_manifest_file_size;
 
   DB* db = nullptr;
   std::string dbid;
@@ -167,22 +66,15 @@ Status DBCloud::Open(const Options& opt, const std::string& local_dbname,
     st = DB::Open(options, local_dbname, column_families, handles, &db);
   }
 
-  // now that the database is opened, all file sizes have been verified and we
-  // no longer need to verify file sizes for each file that we open. Note that
-  // this might have a data race with background compaction, but it's not a big
-  // deal, since it's a boolean and it does not impact correctness in any way.
-  if (cenv->GetCloudEnvOptions().validate_filesize) {
-    *const_cast<bool*>(&cenv->GetCloudEnvOptions().validate_filesize) = false;
-  }
-
-  if (st.ok()) {
-    DBCloudImpl* cloud = new DBCloudImpl(db);
-    *dbptr = cloud;
-    db->GetDbIdentity(dbid);
-  }
+  db->GetDbIdentity(dbid);
   Log(InfoLogLevel::INFO_LEVEL, options.info_log,
       "Opened cloud db with local dir %s dbid %s. %s", local_dbname.c_str(),
       dbid.c_str(), st.ToString().c_str());
+  if (st.ok()) {
+    *dbptr = static_cast<DBCloud*>(db);
+  } else {
+    *dbptr = nullptr;
+  }
   return st;
 }
 

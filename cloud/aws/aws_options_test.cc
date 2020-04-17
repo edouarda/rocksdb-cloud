@@ -22,7 +22,7 @@ DEFINE_bool(enable_print, false, "Print options generated to console.");
 namespace rocksdb {
 
 class AwsOptionsTest : public testing::Test {};
-
+#ifdef USE_AWS
 #ifndef ROCKSDB_LITE
 static Status RegisterAws(ConfigOptions&cfg_opts) {
 #ifdef ROCKSDB_DLL
@@ -38,7 +38,6 @@ static Status RegisterAws(ConfigOptions&cfg_opts) {
 #endif // ROCKSDB_LITE
 
 #ifndef ROCKSDB_LITE
-#ifdef USE_AWS
 TEST_F(AwsOptionsTest, TestLoadAws) {
   DBOptions db_opts;
   ConfigOptions cfg_opts;

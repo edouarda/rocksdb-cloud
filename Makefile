@@ -41,14 +41,10 @@ quoted_perl_command = $(subst ','\'',$(perl_command))
 # `make install-shared`, `make static_lib`, `make install-static` or
 # `make install`
 
-# Set the default DEBUG_LEVEL to 1
-DEBUG_LEVEL?=1
-
 # LIB_MODE can be "static" to build/link against static libraries (default)
 # of "shared" to build/link against shared libraries
-LIB_MODE?=static
 
-ifeq ($(MAKECMDGOALS),dbg)
+ifneq (,$(findstring dbg,$(MAKECMDGOALS)))
 	DEBUG_LEVEL=2
 endif
 
@@ -60,8 +56,8 @@ ifeq ($(MAKECMDGOALS),release)
 	DEBUG_LEVEL=0
 endif
 
-ifeq ($(MAKECMDGOALS),shared_lib)
-	DEBUG_LEVEL=0
+ifneq (,$(findstring shared_lib, $(MAKECMDGOALS)))
+	DEBUG_LEVEL ?=0
 	LIB_MODE=shared
 endif
 
@@ -70,8 +66,9 @@ ifeq ($(MAKECMDGOALS),install-shared)
 	LIB_MODE=shared
 endif
 
-ifeq ($(MAKECMDGOALS),static_lib)
-	DEBUG_LEVEL=0
+ifneq (,$(findstring static_lib, $(MAKECMDGOALS)))
+	DEBUG_LEVEL ?=0
+	LIB_MODE=static
 endif
 
 ifeq ($(MAKECMDGOALS),install-static)
@@ -105,7 +102,16 @@ ifeq ($(MAKECMDGOALS),rocksdbjavastaticpublish)
 	DEBUG_LEVEL=0
 endif
 
-$(info $$DEBUG_LEVEL is ${DEBUG_LEVEL})
+# Set the default DEBUG_LEVEL to 1
+ifeq ("XX$(DEBUG_LEVEL)","XX")
+DEBUG_LEVEL=1
+endif
+# Set the default LIB_MODE to static
+ifeq ("XX$(LIB_MODE)","XX")
+LIB_MODE=static
+endif
+
+$(info DEBUG_LEVEL is ${DEBUG_LEVEL} LIB_MODE is ${LIB_MODE})
 
 # Lite build flag.
 LITE ?= 0
@@ -216,8 +222,7 @@ LIB_SOURCES += utilities/env_librados.cc
 LDFLAGS += -lrados
 endif
 
-AM_LINK = $(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
-#AM_LINK = $(AM_V_CCLD)$(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
+AM_LINK = $(AM_V_CCLD)$(CXX) -o $@ $(EXEC_LDFLAGS) -L. $(patsubst lib%.a, -l%, $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^))  $(LDFLAGS) $(COVERAGEFLAGS)
 AM_SHARE = $(AM_V_CCLD) $(CXX) $(PLATFORM_SHARED_LDFLAGS)$@ $(CXXFLAGS) $(PLATFORM_SHARED_CFLAGS) -L. $(patsubst lib%.$(PLATFORM_SHARED_EXT), -l%, $^) $(LDFLAGS) -o $@
 # detect what platform we're building on
 dummy := $(shell (export ROCKSDB_ROOT="$(CURDIR)"; export PORTABLE="$(PORTABLE)"; "$(CURDIR)/build_tools/build_detect_platform" "$(CURDIR)/make_config.mk"))
@@ -461,7 +466,8 @@ ALL_SOURCES += $(TOOL_LIB_SOURCES) $(BENCH_LIB_SOURCES) $(ANALYZER_LIB_SOURCES) 
 ALL_SOURCES += $(TEST_MAIN_SOURCES) $(TOOL_MAIN_SOURCES) $(BENCH_MAIN_SOURCES)
 ALL_SOURCES += $(CLOUD_LIB_SOURCES) $(CLOUD_TEST_SOURCES)
 
-TESTS = $(patsubst %.cc, %, $(notdir $(TEST_MAIN_SOURCES) $(CLOUD_TEST_SOURCES)))
+TESTS  = $(patsubst %.cc, %, $(notdir $(TEST_MAIN_SOURCES)))
+TESTS += $(patsubst %.cc, %, $(notdir $(CLOUD_TEST_SOURCES)))
 
 ifeq ($(USE_FOLLY_DISTRIBUTED_MUTEX),1)
 	TESTS += folly_synchronization_distributed_mutex_test
@@ -609,7 +615,7 @@ all_but_some_tests: $(LIBRARY) $(BENCHMARKS) tools tools_lib test_libs $(SUBSET)
 
 static_lib: $(STATIC_LIBRARY)
 
-shared_lib: $(SHARED)
+shared_lib: $(SHARED) $(SHARED_CLOUD_LIBRARY)
 
 stress_lib: $(STRESS_LIBRARY)
 

@@ -275,6 +275,7 @@ CLOUD_LIB_SOURCES =                                             \
   cloud/aws/aws_kinesis.cc                                      \
   cloud/aws/aws_retry.cc                                        \
   cloud/aws/aws_s3.cc                                           \
+  cloud/db_cloud_plugin.cc                                      \
   cloud/db_cloud_impl.cc                                        \
   cloud/cloud_env.cc                                            \
   cloud/cloud_env_impl.cc                                       \

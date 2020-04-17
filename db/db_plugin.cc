@@ -73,16 +73,17 @@ Status DBPlugin::ValidateOptions(
     OpenMode open_mode, const std::string& db_name, const DBOptions& db_options,
     const std::vector<ColumnFamilyDescriptor>& column_families) {
   Status s = ValidateOptionsByTable(db_options, column_families);
-  if (s.ok()) {
-    for (auto p : db_options.plugins) {
-      if (p->SupportsOpenMode(open_mode)) {
-        s = p->ValidateCB(open_mode, db_name, db_options, column_families);
-        if (!s.ok()) {
-          return s;
-        }
-      } else {
-        return p->NotSupported(open_mode);
+  if (!s.ok()) {
+    return s;
+  }
+  for (auto p : db_options.plugins) {
+    if (p->SupportsOpenMode(open_mode)) {
+      s = p->ValidateCB(open_mode, db_name, db_options, column_families);
+      if (!s.ok()) {
+        return s;
       }
+    } else {
+      return p->NotSupported(open_mode);
     }
   }
   for (auto& cfd : column_families) {

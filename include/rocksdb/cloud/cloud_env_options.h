@@ -22,6 +22,7 @@ namespace rocksdb {
 class CloudEnv;
 class CloudLogController;
 class CloudStorageProvider;
+class ObjectLibrary;
 class OptionTypeInfo;
 
 enum CloudType : unsigned char {
@@ -469,4 +470,7 @@ public:
                           CloudEnv** cenv);
 };
 
+extern "C" {
+void RegisterCloudObjects(ObjectLibrary& library, const std::string& arg);
+}  // extern "C"
 }  // namespace rocksdb

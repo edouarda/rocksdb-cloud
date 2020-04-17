@@ -308,13 +308,15 @@ class DynamicObjectLibrary : public LocalObjectLibrary {
   const char *Name() const override { return kDynamicLibraryName.c_str(); }
 
   Status PrepareOptions(const ConfigOptions &opts) override {
-    Status status = opts.env->LoadLibrary(options.library, "", &dll_);
-    if (status.ok()) {
-      status = RegisterLibrary(dll_);
+    Status status;
+    if (dll_ == nullptr) {
+      status = opts.env->LoadLibrary(options.library, "", &dll_);
+      if (status.ok()) {
+        status = RegisterLibrary(dll_);
+      }
     }
     return status;
   }
-
  private:
   std::shared_ptr<DynamicLibrary> dll_;
 };

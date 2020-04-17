@@ -42,8 +42,6 @@ class DBCloudImpl : public DBCloud {
   Status DoCheckpointToCloud(const BucketOptions& destination,
                              const CheckpointToCloudOptions& options);
 
-  // Maximum manifest file size
-  static const uint64_t max_manifest_file_size = 4 * 1024L * 1024L;
 };
 }
 #endif  // ROCKSDB_LITE

@@ -368,7 +368,7 @@ LDBCommand::LDBCommand(const std::map<std::string, std::string>& options,
 }
 
 void LDBCommand::OpenDB() {
-  if (!create_if_missing_ && try_load_options_) {
+  if (try_load_options_) {
     Status s = LoadLatestOptions(db_path_, options_.env, cfg_options_,
                                  &options_, &column_families_);
     if (!s.ok() && !s.IsNotFound()) {

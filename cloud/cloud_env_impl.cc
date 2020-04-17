@@ -8,6 +8,7 @@
 #include "cloud/cloud_env_wrapper.h"
 #include "cloud/cloud_log_controller_impl.h"
 #include "cloud/cloud_storage_provider_impl.h"
+#include "cloud/db_cloud_plugin.h"
 #include "cloud/filename.h"
 #include "cloud/manifest_reader.h"
 #include "env/composite_env_wrapper.h"
@@ -21,6 +22,7 @@
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
+#include "rocksdb/utilities/object_registry.h"
 #include "util/xxhash.h"
 
 namespace rocksdb {
@@ -1087,5 +1089,19 @@ Status CloudEnvImpl::ValidateOptions(const DBOptions& db_opts, const ColumnFamil
 }
 
   
+extern "C" {
+void RegisterCloudObjects(ObjectLibrary& library, const std::string& /*arg*/) {
+  printf("MJR: Registering Cloud Environment[%s]\n", CloudOptionNames::kNameCloud);
+  library.Register<rocksdb::DBPlugin>(
+      CloudOptionNames::kNameCloud,
+      [](const std::string& /*uri*/, std::unique_ptr<rocksdb::DBPlugin>* guard,
+         std::string* /*errmsg*/) {
+        printf("MJR: Creating CloudDBPlugin\n");
+        guard->reset(new cloud::CloudDBPlugin());
+        return guard->get();
+      });
+}
+  
+}  // extern "C"
 }  // namespace rocksdb
 #endif  // ROCKSDB_LITE

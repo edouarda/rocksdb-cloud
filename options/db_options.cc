@@ -414,12 +414,16 @@ static std::unordered_map<std::string, OptionTypeInfo>
                         OptionTypeInfo::AsCustomS<DBPlugin>(
                             0, OptionVerificationType::kNormal,
                             OptionTypeFlags::kShared))},
+};
+  
+static std::unordered_map<std::string, OptionTypeInfo>
+    db_object_registry_type_info = {
         {"object_registry",
          {offsetof(struct ImmutableDBOptions, object_registry),
           OptionType::kConfigurable, OptionVerificationType::kNormal,
           (OptionTypeFlags::kShared | OptionTypeFlags::kCompareNever)}},
 };
-
+  
 const std::string OptionsHelper::kDBOptionsName = "DBOptions";
 const std::string OptionsHelper::kImmutableDBOptionsName = "ImmutableDBOptions";
 const std::string OptionsHelper::kMutableDBOptionsName = "MutableDBOptions";
@@ -450,6 +454,8 @@ class DBOptionsConfigurable : public MutableDBConfigurable {
       immutable_ = ImmutableDBOptions(copy);
     }
     immutable_.object_registry = cfg.registry;
+    RegisterOptions("", &immutable_,
+                    &db_object_registry_type_info);
     RegisterOptions(OptionsHelper::kImmutableDBOptionsName, &immutable_,
                     &db_immutable_options_type_info);
   }
