@@ -207,7 +207,7 @@ class PosixEnv : public CompositeEnvWrapper {
     Status status;
     assert(result != nullptr);
     std::string library_name = name;
-    if (name.empty()) {
+    if (!name.empty()) {
       if (library_name.find(kSharedLibExt) == std::string::npos) {
         library_name = library_name + kSharedLibExt;
       }

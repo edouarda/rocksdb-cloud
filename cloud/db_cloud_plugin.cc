@@ -15,6 +15,7 @@
 #include "rocksdb/options.h"
 #include "rocksdb/persistent_cache.h"
 #include "rocksdb/table.h"
+#include "rocksdb/utilities/options_type.h"
 
 #ifndef ROCKSDB_LITE
 namespace ROCKSDB_NAMESPACE {
@@ -48,12 +49,21 @@ class ConstantSizeSstFileManager : public SstFileManagerImpl {
 }  // namespace
 
   
+static std::unordered_map<std::string, OptionTypeInfo> cloud_plugin_type_info = {
+    {"persistent_cache_path",
+     {offsetof(struct CloudPluginOptions, persistent_cache_path), OptionType::kString}},
+    {"persistent_cache_size_gb",
+     {offsetof(struct CloudPluginOptions, persistent_cache_size_gb), OptionType::kUInt64T}},
+};
+
 CloudDBPlugin::CloudDBPlugin() {
+  RegisterOptions("CloudPluginOptions", &plugin_options, &cloud_plugin_type_info); 
 }
 
 CloudDBPlugin::CloudDBPlugin(const std::string persistent_cache_path,
                              uint64_t persistent_cache_size)
   : plugin_options(persistent_cache_path, persistent_cache_size) {
+  RegisterOptions("CloudPluginOptions", &plugin_options, &cloud_plugin_type_info); 
 }
   
 const char* CloudDBPlugin::Name() const {
