@@ -1344,11 +1344,11 @@ Status DBImpl::Open(
   bool owns_info_log = (db_options.info_log == nullptr);
   *dbptr = nullptr;
   handles->clear();
-  Status s = DBPlugin::SanitizeOptions(DBPlugin::Normal, dbname, &db_options,
-                                       &column_families);
+  Status s = DBPlugin::SanitizeOptionsForDB(DBPlugin::Normal, dbname, &db_options,
+                                            &column_families);
   if (s.ok()) {
-    s = DBPlugin::ValidateOptions(DBPlugin::Normal, dbname, db_options,
-                                  column_families);
+    s = DBPlugin::ValidateOptionsForDB(DBPlugin::Normal, dbname, db_options,
+                                       column_families);
   }
   if (!s.ok()) {
     return s;
