@@ -39,7 +39,7 @@ const DBPlugin* DBPlugin::Find(
   return nullptr;
 }
 
-Status DBPlugin::SanitizeOptions(
+Status DBPlugin::SanitizeOptionsForDB(
     OpenMode open_mode, const std::string& db_name, DBOptions* db_options,
     std::vector<ColumnFamilyDescriptor>* column_families) {
   Status s;
@@ -69,7 +69,7 @@ static Status ValidateOptionsByTable(
 }
 
 // Validate self-consistency of DB options and its consistency with cf options
-Status DBPlugin::ValidateOptions(
+Status DBPlugin::ValidateOptionsForDB(
     OpenMode open_mode, const std::string& db_name, const DBOptions& db_options,
     const std::vector<ColumnFamilyDescriptor>& column_families) {
   Status s = ValidateOptionsByTable(db_options, column_families);

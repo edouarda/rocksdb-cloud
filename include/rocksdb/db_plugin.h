@@ -84,7 +84,7 @@ class DBPlugin : public Customizable {
 
   // Traverses the list of plugins and sanitizes the options in order.
   // On error, stops the traversal and returns the status.
-  static Status SanitizeOptions(
+  static Status SanitizeOptionsForDB(
       OpenMode mode, const std::string& db_name, DBOptions* db_options,
       std::vector<ColumnFamilyDescriptor>* column_families);
 
@@ -104,7 +104,7 @@ class DBPlugin : public Customizable {
 
   // Traverses the list of plugins and validates the options in order.
   // On error, stops the traversal and returns the status.
-  static Status ValidateOptions(
+  static Status ValidateOptionsForDB(
       OpenMode mode, const std::string& db_name, const DBOptions& db_options,
       const std::vector<ColumnFamilyDescriptor>& column_families);
 

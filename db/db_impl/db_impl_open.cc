@@ -1342,11 +1342,11 @@ Status DBImpl::Open(
   DBOptions db_options = db_options_in;
   std::vector<ColumnFamilyDescriptor> column_families = column_families_in;
   bool owns_info_log = (db_options.info_log == nullptr);
-  Status s = DBPlugin::SanitizeOptions(DBPlugin::Normal, dbname, &db_options,
-                                       &column_families);
+  Status s = DBPlugin::SanitizeOptionsForDB(DBPlugin::Normal, dbname, &db_options,
+                                            &column_families);
   if (s.ok()) {
-    s = DBPlugin::ValidateOptions(DBPlugin::Normal, dbname, db_options,
-                                  column_families);
+    s = DBPlugin::ValidateOptionsForDB(DBPlugin::Normal, dbname, db_options,
+                                       column_families);
   }
   if (!s.ok()) {
     return s;
